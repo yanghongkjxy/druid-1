@@ -37,21 +37,19 @@ import com.google.common.io.Files;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
-import com.metamx.common.logger.Logger;
 import com.metamx.emitter.EmittingLogger;
-import com.metamx.emitter.core.LoggingEmitter;
+import com.metamx.emitter.core.NoopEmitter;
 import com.metamx.emitter.service.ServiceEmitter;
 import com.metamx.metrics.MonitorScheduler;
 import io.druid.client.cache.CacheConfig;
 import io.druid.client.cache.MapCache;
-import io.druid.concurrent.Execs;
 import io.druid.data.input.impl.DimensionsSpec;
 import io.druid.data.input.impl.JSONParseSpec;
-import io.druid.data.input.impl.JSONPathFieldSpec;
-import io.druid.data.input.impl.JSONPathSpec;
 import io.druid.data.input.impl.StringInputRowParser;
 import io.druid.data.input.impl.TimestampSpec;
-import io.druid.granularity.QueryGranularities;
+import io.druid.discovery.DataNodeService;
+import io.druid.discovery.DruidNodeAnnouncer;
+import io.druid.discovery.LookupNodeService;
 import io.druid.indexing.common.SegmentLoaderFactory;
 import io.druid.indexing.common.TaskLock;
 import io.druid.indexing.common.TaskStatus;
@@ -69,13 +67,21 @@ import io.druid.indexing.overlord.IndexerMetadataStorageCoordinator;
 import io.druid.indexing.overlord.MetadataTaskStorage;
 import io.druid.indexing.overlord.TaskLockbox;
 import io.druid.indexing.overlord.TaskStorage;
+import io.druid.indexing.overlord.supervisor.SupervisorManager;
 import io.druid.indexing.test.TestDataSegmentAnnouncer;
 import io.druid.indexing.test.TestDataSegmentKiller;
-import io.druid.jackson.DefaultObjectMapper;
 import io.druid.java.util.common.CompressionUtils;
-import io.druid.java.util.common.Granularity;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.Intervals;
+import io.druid.java.util.common.StringUtils;
+import io.druid.java.util.common.concurrent.Execs;
+import io.druid.java.util.common.granularity.Granularities;
 import io.druid.java.util.common.guava.Sequences;
+import io.druid.java.util.common.logger.Logger;
+import io.druid.java.util.common.parsers.JSONPathFieldSpec;
+import io.druid.java.util.common.parsers.JSONPathSpec;
+import io.druid.math.expr.ExprMacroTable;
 import io.druid.metadata.EntryExistsException;
 import io.druid.metadata.IndexerSQLMetadataStorageCoordinator;
 import io.druid.metadata.SQLMetadataStorageActionHandlerFactory;
@@ -84,6 +90,7 @@ import io.druid.query.DefaultQueryRunnerFactoryConglomerate;
 import io.druid.query.Druids;
 import io.druid.query.IntervalChunkingQueryRunnerDecorator;
 import io.druid.query.Query;
+import io.druid.query.QueryPlus;
 import io.druid.query.QueryRunner;
 import io.druid.query.QueryRunnerFactory;
 import io.druid.query.QueryRunnerFactoryConglomerate;
@@ -94,6 +101,7 @@ import io.druid.query.SegmentDescriptor;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.CountAggregatorFactory;
 import io.druid.query.aggregation.LongSumAggregatorFactory;
+import io.druid.query.filter.SelectorDimFilter;
 import io.druid.query.timeseries.TimeseriesQuery;
 import io.druid.query.timeseries.TimeseriesQueryEngine;
 import io.druid.query.timeseries.TimeseriesQueryQueryToolChest;
@@ -101,8 +109,11 @@ import io.druid.query.timeseries.TimeseriesQueryRunnerFactory;
 import io.druid.query.timeseries.TimeseriesResultValue;
 import io.druid.segment.IndexIO;
 import io.druid.segment.QueryableIndex;
+import io.druid.segment.TestHelper;
 import io.druid.segment.column.DictionaryEncodedColumn;
 import io.druid.segment.indexing.DataSchema;
+import io.druid.segment.transform.ExpressionTransform;
+import io.druid.segment.transform.TransformSpec;
 import io.druid.segment.indexing.granularity.UniformGranularitySpec;
 import io.druid.segment.loading.DataSegmentPusher;
 import io.druid.segment.loading.LocalDataSegmentPusher;
@@ -112,22 +123,24 @@ import io.druid.segment.loading.SegmentLoaderLocalCacheManager;
 import io.druid.segment.loading.StorageLocationConfig;
 import io.druid.segment.realtime.plumber.SegmentHandoffNotifier;
 import io.druid.segment.realtime.plumber.SegmentHandoffNotifierFactory;
+import io.druid.server.DruidNode;
+import io.druid.server.coordination.DataSegmentServerAnnouncer;
+import io.druid.server.coordination.ServerType;
 import io.druid.timeline.DataSegment;
 import org.apache.curator.test.TestingCluster;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.easymock.EasyMock;
-import org.joda.time.DateTime;
 import org.joda.time.Interval;
 import org.joda.time.Period;
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
 
 import java.io.File;
 import java.io.IOException;
@@ -141,78 +154,75 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-@RunWith(Parameterized.class)
 public class KafkaIndexTaskTest
 {
-  private final boolean buildV9Directly;
+  private static final Logger log = new Logger(KafkaIndexTaskTest.class);
+  private static final ObjectMapper objectMapper = TestHelper.getJsonMapper();
+  private static final long POLL_RETRY_MS = 100;
+
+  private static TestingCluster zkServer;
+  private static TestBroker kafkaServer;
+  private static ServiceEmitter emitter;
+  private static ListeningExecutorService taskExec;
+  private static int topicPostfix;
+
+  private final List<Task> runningTasks = Lists.newArrayList();
+
   private long handoffConditionTimeout = 0;
   private boolean reportParseExceptions = false;
   private boolean doHandoff = true;
 
-  private TestingCluster zkServer;
-  private TestBroker kafkaServer;
-  private ServiceEmitter emitter;
-  private ListeningExecutorService taskExec;
   private TaskToolboxFactory toolboxFactory;
   private IndexerMetadataStorageCoordinator metadataStorageCoordinator;
   private TaskStorage taskStorage;
   private TaskLockbox taskLockbox;
   private File directory;
+  private String topic;
+  private List<ProducerRecord<byte[], byte[]>> records;
 
-  private final List<Task> runningTasks = Lists.newArrayList();
-
-  private static final Logger log = new Logger(KafkaIndexTaskTest.class);
-  private static final ObjectMapper objectMapper = new DefaultObjectMapper();
-
-  private static final DataSchema DATA_SCHEMA;
-
-  private static final List<ProducerRecord<byte[], byte[]>> RECORDS = ImmutableList.of(
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, JB("2008", "a", "y", 1.0f)),
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, JB("2009", "b", "y", 1.0f)),
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, JB("2010", "c", "y", 1.0f)),
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, JB("2011", "d", "y", 1.0f)),
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, JB("2011", "e", "y", 1.0f)),
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, "unparseable".getBytes()),
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, null),
-      new ProducerRecord<byte[], byte[]>("topic0", 0, null, JB("2013", "f", "y", 1.0f)),
-      new ProducerRecord<byte[], byte[]>("topic0", 1, null, JB("2012", "g", "y", 1.0f)),
-      new ProducerRecord<byte[], byte[]>("topic0", 1, null, JB("2011", "h", "y", 1.0f))
+  private static final DataSchema DATA_SCHEMA = new DataSchema(
+      "test_ds",
+      objectMapper.convertValue(
+          new StringInputRowParser(
+              new JSONParseSpec(
+                  new TimestampSpec("timestamp", "iso", null),
+                  new DimensionsSpec(
+                      DimensionsSpec.getDefaultSchemas(ImmutableList.<String>of("dim1", "dim1t", "dim2")),
+                      null,
+                      null
+                  ),
+                  new JSONPathSpec(true, ImmutableList.<JSONPathFieldSpec>of()),
+                  ImmutableMap.<String, Boolean>of()
+              ),
+              Charsets.UTF_8.name()
+          ),
+          Map.class
+      ),
+      new AggregatorFactory[]{new CountAggregatorFactory("rows")},
+      new UniformGranularitySpec(Granularities.DAY, Granularities.NONE, null),
+      null,
+      objectMapper
   );
 
-  static {
-    DATA_SCHEMA = new DataSchema(
-        "test_ds",
-        objectMapper.convertValue(
-            new StringInputRowParser(
-                new JSONParseSpec(
-                    new TimestampSpec("timestamp", "iso", null),
-                    new DimensionsSpec(
-                        DimensionsSpec.getDefaultSchemas(ImmutableList.<String>of("dim1", "dim2")),
-                        null,
-                        null
-                    ),
-                    new JSONPathSpec(true, ImmutableList.<JSONPathFieldSpec>of()),
-                    ImmutableMap.<String, Boolean>of()
-                ),
-                Charsets.UTF_8.name()
-            ),
-            Map.class
-        ),
-        new AggregatorFactory[]{new CountAggregatorFactory("rows")},
-        new UniformGranularitySpec(Granularity.DAY, QueryGranularities.NONE, null),
-        objectMapper
+  private static List<ProducerRecord<byte[], byte[]>> generateRecords(String topic)
+  {
+    return ImmutableList.of(
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, JB("2008", "a", "y", 1.0f)),
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, JB("2009", "b", "y", 1.0f)),
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, JB("2010", "c", "y", 1.0f)),
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, JB("2011", "d", "y", 1.0f)),
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, JB("2011", "e", "y", 1.0f)),
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, StringUtils.toUtf8("unparseable")),
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, null),
+        new ProducerRecord<byte[], byte[]>(topic, 0, null, JB("2013", "f", "y", 1.0f)),
+        new ProducerRecord<byte[], byte[]>(topic, 1, null, JB("2012", "g", "y", 1.0f)),
+        new ProducerRecord<byte[], byte[]>(topic, 1, null, JB("2011", "h", "y", 1.0f))
     );
   }
 
-  @Parameterized.Parameters(name = "buildV9Directly = {0}")
-  public static Iterable<Object[]> constructorFeeder()
+  private static String getTopicName()
   {
-    return ImmutableList.of(new Object[]{true}, new Object[]{false});
-  }
-
-  public KafkaIndexTaskTest(boolean buildV9Directly)
-  {
-    this.buildV9Directly = buildV9Directly;
+    return "topic" + topicPostfix++;
   }
 
   @Rule
@@ -221,29 +231,23 @@ public class KafkaIndexTaskTest
   @Rule
   public final TestDerbyConnector.DerbyConnectorRule derby = new TestDerbyConnector.DerbyConnectorRule();
 
-  @Before
-  public void setUp() throws Exception
+  @BeforeClass
+  public static void setupClass() throws Exception
   {
     emitter = new ServiceEmitter(
         "service",
         "host",
-        new LoggingEmitter(
-            log,
-            LoggingEmitter.Level.ERROR,
-            new DefaultObjectMapper()
-        )
+        new NoopEmitter()
     );
     emitter.start();
     EmittingLogger.registerEmitter(emitter);
-
-    makeToolboxFactory();
 
     zkServer = new TestingCluster(1);
     zkServer.start();
 
     kafkaServer = new TestBroker(
         zkServer.getConnectString(),
-        tempFolder.newFolder(),
+        null,
         1,
         ImmutableMap.of("num.partitions", "2")
     );
@@ -254,17 +258,22 @@ public class KafkaIndexTaskTest
             Execs.makeThreadFactory("kafka-task-test-%d")
         )
     );
+  }
 
+  @Before
+  public void setupTest() throws IOException
+  {
     handoffConditionTimeout = 0;
     reportParseExceptions = false;
     doHandoff = true;
+    topic = getTopicName();
+    records = generateRecords(topic);
+    makeToolboxFactory();
   }
 
   @After
-  public void tearDown() throws Exception
+  public void tearDownTest()
   {
-    emitter.close();
-
     synchronized (runningTasks) {
       for (Task task : runningTasks) {
         task.stopGracefully();
@@ -273,6 +282,12 @@ public class KafkaIndexTaskTest
       runningTasks.clear();
     }
 
+    destroyToolboxFactory();
+  }
+
+  @AfterClass
+  public static void tearDownClass() throws Exception
+  {
     taskExec.shutdown();
     taskExec.awaitTermination(9999, TimeUnit.DAYS);
 
@@ -282,7 +297,7 @@ public class KafkaIndexTaskTest
     zkServer.stop();
     zkServer = null;
 
-    destroyToolboxFactory();
+    emitter.close();
   }
 
   @Test(timeout = 60_000L)
@@ -290,7 +305,7 @@ public class KafkaIndexTaskTest
   {
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -299,12 +314,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -324,13 +341,13 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -340,12 +357,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -359,7 +378,7 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -377,13 +396,13 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -393,12 +412,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 0L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 0L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            new DateTime("2010")
+            DateTimes.of("2010"),
+            null,
+            false
         ),
         null
     );
@@ -412,7 +433,7 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -430,13 +451,132 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
+  }
+
+  @Test(timeout = 60_000L)
+  public void testRunWithMaximumMessageTime() throws Exception
+  {
+    final KafkaIndexTask task = createTask(
+        null,
+        new KafkaIOConfig(
+            "sequence0",
+            new KafkaPartitions(topic, ImmutableMap.of(0, 0L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
+            kafkaServer.consumerProperties(),
+            true,
+            false,
+            null,
+            DateTimes.of("2010"),
+            false
+        ),
+        null
+    );
+
+    final ListenableFuture<TaskStatus> future = runTask(task);
+
+    // Wait for the task to start reading
+    while (task.getStatus() != KafkaIndexTask.Status.READING) {
+      Thread.sleep(10);
+    }
+
+    // Insert data
+    try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
+        kafkaProducer.send(record).get();
+      }
+    }
+
+    // Wait for task to exit
+    Assert.assertEquals(TaskStatus.Status.SUCCESS, future.get().getStatusCode());
+
+    // Check metrics
+    Assert.assertEquals(3, task.getFireDepartmentMetrics().processed());
+    Assert.assertEquals(0, task.getFireDepartmentMetrics().unparseable());
+    Assert.assertEquals(2, task.getFireDepartmentMetrics().thrownAway());
+
+    // Check published metadata
+    SegmentDescriptor desc1 = SD(task, "2008/P1D", 0);
+    SegmentDescriptor desc2 = SD(task, "2009/P1D", 0);
+    SegmentDescriptor desc3 = SD(task, "2010/P1D", 0);
+    Assert.assertEquals(ImmutableSet.of(desc1, desc2, desc3), publishedDescriptors());
+    Assert.assertEquals(
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
+        metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
+    );
+
+    // Check segments in deep storage
+    Assert.assertEquals(ImmutableList.of("a"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("b"), readSegmentColumn("dim1", desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc3));
+  }
+
+  @Test(timeout = 60_000L)
+  public void testRunWithTransformSpec() throws Exception
+  {
+    final KafkaIndexTask task = createTask(
+        null,
+        DATA_SCHEMA.withTransformSpec(
+            new TransformSpec(
+                new SelectorDimFilter("dim1", "b", null),
+                ImmutableList.of(
+                    new ExpressionTransform("dim1t", "concat(dim1,dim1)", ExprMacroTable.nil())
+                )
+            )
+        ),
+        new KafkaIOConfig(
+            "sequence0",
+            new KafkaPartitions(topic, ImmutableMap.of(0, 0L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
+            kafkaServer.consumerProperties(),
+            true,
+            false,
+            null,
+            null,
+            false
+        ),
+        null
+    );
+
+    final ListenableFuture<TaskStatus> future = runTask(task);
+
+    // Wait for the task to start reading
+    while (task.getStatus() != KafkaIndexTask.Status.READING) {
+      Thread.sleep(10);
+    }
+
+    // Insert data
+    try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
+        kafkaProducer.send(record).get();
+      }
+    }
+
+    // Wait for task to exit
+    Assert.assertEquals(TaskStatus.Status.SUCCESS, future.get().getStatusCode());
+
+    // Check metrics
+    Assert.assertEquals(1, task.getFireDepartmentMetrics().processed());
+    Assert.assertEquals(0, task.getFireDepartmentMetrics().unparseable());
+    Assert.assertEquals(4, task.getFireDepartmentMetrics().thrownAway());
+
+    // Check published metadata
+    SegmentDescriptor desc1 = SD(task, "2009/P1D", 0);
+    Assert.assertEquals(ImmutableSet.of(desc1), publishedDescriptors());
+    Assert.assertEquals(
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
+        metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
+    );
+
+    // Check segments in deep storage
+    Assert.assertEquals(ImmutableList.of("b"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("bb"), readSegmentColumn("dim1t", desc1));
   }
 
   @Test(timeout = 60_000L)
@@ -444,7 +584,7 @@ public class KafkaIndexTaskTest
   {
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -453,12 +593,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -484,7 +626,7 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -493,12 +635,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -518,13 +662,13 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -535,7 +679,7 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -544,12 +688,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -569,13 +715,13 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -585,7 +731,7 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -594,12 +740,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 7L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 7L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -626,12 +774,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -639,12 +789,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -654,7 +806,7 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -676,13 +828,13 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task1, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -692,12 +844,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -705,19 +859,21 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence1",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 3L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 8L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 3L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 8L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -735,21 +891,21 @@ public class KafkaIndexTaskTest
     Assert.assertEquals(0, task1.getFireDepartmentMetrics().unparseable());
     Assert.assertEquals(0, task1.getFireDepartmentMetrics().thrownAway());
     Assert.assertEquals(3, task2.getFireDepartmentMetrics().processed());
-    Assert.assertEquals(2, task2.getFireDepartmentMetrics().unparseable());
-    Assert.assertEquals(0, task2.getFireDepartmentMetrics().thrownAway());
+    Assert.assertEquals(1, task2.getFireDepartmentMetrics().unparseable());
+    Assert.assertEquals(1, task2.getFireDepartmentMetrics().thrownAway());
 
     // Check published segments & metadata, should all be from the first task
     SegmentDescriptor desc1 = SD(task1, "2010/P1D", 0);
     SegmentDescriptor desc2 = SD(task1, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -759,12 +915,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             false,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -772,19 +930,21 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence1",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 3L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 8L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 3L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 8L)),
             kafkaServer.consumerProperties(),
             false,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -808,8 +968,8 @@ public class KafkaIndexTaskTest
     Assert.assertEquals(0, task1.getFireDepartmentMetrics().unparseable());
     Assert.assertEquals(0, task1.getFireDepartmentMetrics().thrownAway());
     Assert.assertEquals(3, task2.getFireDepartmentMetrics().processed());
-    Assert.assertEquals(2, task2.getFireDepartmentMetrics().unparseable());
-    Assert.assertEquals(0, task2.getFireDepartmentMetrics().thrownAway());
+    Assert.assertEquals(1, task2.getFireDepartmentMetrics().unparseable());
+    Assert.assertEquals(1, task2.getFireDepartmentMetrics().thrownAway());
 
     // Check published segments & metadata
     SegmentDescriptor desc3 = SD(task2, "2011/P1D", 1);
@@ -818,10 +978,10 @@ public class KafkaIndexTaskTest
     Assert.assertNull(metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource()));
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc3));
-    Assert.assertEquals(ImmutableList.of("f"), readSegmentDim1(desc4));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc3));
+    Assert.assertEquals(ImmutableList.of("f"), readSegmentColumn("dim1", desc4));
   }
 
   @Test(timeout = 60_000L)
@@ -831,12 +991,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L, 1, 0L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L, 1, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L, 1, 0L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L, 1, 2L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -845,9 +1007,10 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
+      kafkaProducer.flush();
     }
 
     // Wait for tasks to exit
@@ -865,18 +1028,18 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc4 = SD(task, "2012/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2, desc3, desc4), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L, 1, 2L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L, 1, 2L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("g"), readSegmentDim1(desc4));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("g"), readSegmentColumn("dim1", desc4));
 
     // Check desc2/desc3 without strong ordering because two partitions are interleaved nondeterministically
     Assert.assertEquals(
         ImmutableSet.of(ImmutableList.of("d", "e"), ImmutableList.of("h")),
-        ImmutableSet.of(readSegmentDim1(desc2), readSegmentDim1(desc3))
+        ImmutableSet.of(readSegmentColumn("dim1", desc2), readSegmentColumn("dim1", desc3))
     );
   }
 
@@ -887,12 +1050,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -900,12 +1065,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence1",
-            new KafkaPartitions("topic0", ImmutableMap.of(1, 0L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(1, 1L)),
+            new KafkaPartitions(topic, ImmutableMap.of(1, 0L)),
+            new KafkaPartitions(topic, ImmutableMap.of(1, 1L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -915,7 +1082,7 @@ public class KafkaIndexTaskTest
 
     // Insert data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -938,14 +1105,14 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc3 = SD(task2, "2012/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2, desc3), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L, 1, 1L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L, 1, 1L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
-    Assert.assertEquals(ImmutableList.of("g"), readSegmentDim1(desc3));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
+    Assert.assertEquals(ImmutableList.of("g"), readSegmentColumn("dim1", desc3));
   }
 
   @Test(timeout = 60_000L)
@@ -955,12 +1122,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -969,7 +1138,7 @@ public class KafkaIndexTaskTest
 
     // Insert some data, but not enough for the task to finish
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : Iterables.limit(RECORDS, 4)) {
+      for (ProducerRecord<byte[], byte[]> record : Iterables.limit(records, 4)) {
         kafkaProducer.send(record).get();
       }
     }
@@ -989,12 +1158,14 @@ public class KafkaIndexTaskTest
         task1.getId(),
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -1003,7 +1174,7 @@ public class KafkaIndexTaskTest
 
     // Insert remaining data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : Iterables.skip(RECORDS, 4)) {
+      for (ProducerRecord<byte[], byte[]> record : Iterables.skip(records, 4)) {
         kafkaProducer.send(record).get();
       }
     }
@@ -1024,13 +1195,13 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task1, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -1040,12 +1211,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -1054,9 +1227,10 @@ public class KafkaIndexTaskTest
 
     // Insert some data, but not enough for the task to finish
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : Iterables.limit(RECORDS, 4)) {
+      for (ProducerRecord<byte[], byte[]> record : Iterables.limit(records, 4)) {
         kafkaProducer.send(record).get();
       }
+      kafkaProducer.flush();
     }
 
     while (countEvents(task) != 2) {
@@ -1076,7 +1250,7 @@ public class KafkaIndexTaskTest
 
     // Insert remaining data
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : Iterables.skip(RECORDS, 4)) {
+      for (ProducerRecord<byte[], byte[]> record : Iterables.skip(records, 4)) {
         kafkaProducer.send(record).get();
       }
     }
@@ -1106,13 +1280,13 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc2 = SD(task, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 5L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 5L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc2));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc2));
   }
 
   @Test(timeout = 60_000L)
@@ -1122,12 +1296,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 1L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 3L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 1L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 3L)),
             kafkaServer.consumerProperties(),
             true,
             true,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -1135,7 +1311,7 @@ public class KafkaIndexTaskTest
     final ListenableFuture<TaskStatus> future = runTask(task);
 
     try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
-      for (ProducerRecord<byte[], byte[]> record : RECORDS) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
         kafkaProducer.send(record).get();
       }
     }
@@ -1191,14 +1367,14 @@ public class KafkaIndexTaskTest
     SegmentDescriptor desc3 = SD(task, "2011/P1D", 0);
     Assert.assertEquals(ImmutableSet.of(desc1, desc2, desc3), publishedDescriptors());
     Assert.assertEquals(
-        new KafkaDataSourceMetadata(new KafkaPartitions("topic0", ImmutableMap.of(0, 6L))),
+        new KafkaDataSourceMetadata(new KafkaPartitions(topic, ImmutableMap.of(0, 6L))),
         metadataStorageCoordinator.getDataSourceMetadata(DATA_SCHEMA.getDataSource())
     );
 
     // Check segments in deep storage
-    Assert.assertEquals(ImmutableList.of("b"), readSegmentDim1(desc1));
-    Assert.assertEquals(ImmutableList.of("c"), readSegmentDim1(desc2));
-    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentDim1(desc3));
+    Assert.assertEquals(ImmutableList.of("b"), readSegmentColumn("dim1", desc1));
+    Assert.assertEquals(ImmutableList.of("c"), readSegmentColumn("dim1", desc2));
+    Assert.assertEquals(ImmutableList.of("d", "e"), readSegmentColumn("dim1", desc3));
   }
 
   @Test(timeout = 30_000L)
@@ -1208,12 +1384,14 @@ public class KafkaIndexTaskTest
         null,
         new KafkaIOConfig(
             "sequence0",
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 2L)),
-            new KafkaPartitions("topic0", ImmutableMap.of(0, 5L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 2L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 5L)),
             kafkaServer.consumerProperties(),
             true,
             false,
-            null
+            null,
+            null,
+            false
         ),
         null
     );
@@ -1226,7 +1404,48 @@ public class KafkaIndexTaskTest
 
     task.pause(0);
 
-    Assert.assertEquals(KafkaIndexTask.Status.PAUSED, task.getStatus());
+    while (!task.getStatus().equals(KafkaIndexTask.Status.PAUSED)) {
+      Thread.sleep(25);
+    }
+  }
+
+  @Test(timeout = 30_000L)
+  public void testRunWithOffsetOutOfRangeExceptionAndNextOffsetGreaterThanLeastAvailable() throws Exception
+  {
+    // Insert data
+    try (final KafkaProducer<byte[], byte[]> kafkaProducer = kafkaServer.newProducer()) {
+      for (ProducerRecord<byte[], byte[]> record : records) {
+        kafkaProducer.send(record).get();
+      }
+    }
+
+    final KafkaIndexTask task = createTask(
+        null,
+        new KafkaIOConfig(
+            "sequence0",
+            new KafkaPartitions(topic, ImmutableMap.of(0, 200L)),
+            new KafkaPartitions(topic, ImmutableMap.of(0, 500L)),
+            kafkaServer.consumerProperties(),
+            true,
+            false,
+            null,
+            null,
+            false
+        ),
+        true
+    );
+
+    runTask(task);
+
+    while (!task.getStatus().equals(KafkaIndexTask.Status.READING)) {
+      Thread.sleep(20);
+    }
+
+    for (int i = 0; i < 5; i++) {
+      Assert.assertEquals(task.getStatus(), KafkaIndexTask.Status.READING);
+      // Offset should not be reset
+      Assert.assertTrue(task.getCurrentOffsets().get(0) == 200L);
+    }
   }
 
   private ListenableFuture<TaskStatus> runTask(final Task task)
@@ -1282,49 +1501,78 @@ public class KafkaIndexTaskTest
   private KafkaIndexTask createTask(
       final String taskId,
       final KafkaIOConfig ioConfig,
-      final Integer maxRowsPerSegment
+      final Boolean resetOffsetAutomatically
+  )
+  {
+    return createTask(taskId, DATA_SCHEMA, ioConfig, resetOffsetAutomatically);
+  }
+
+  private KafkaIndexTask createTask(
+      final String taskId,
+      final DataSchema dataSchema,
+      final KafkaIOConfig ioConfig,
+      final Boolean resetOffsetAutomatically
   )
   {
     final KafkaTuningConfig tuningConfig = new KafkaTuningConfig(
         1000,
-        maxRowsPerSegment,
+        null,
         new Period("P1Y"),
         null,
         null,
         null,
-        buildV9Directly,
+        true,
         reportParseExceptions,
-        handoffConditionTimeout
+        handoffConditionTimeout,
+        resetOffsetAutomatically
     );
-    return new KafkaIndexTask(
+    final KafkaIndexTask task = new KafkaIndexTask(
         taskId,
         null,
-        DATA_SCHEMA,
+        cloneDataSchema(dataSchema),
         tuningConfig,
         ioConfig,
         null,
+        null,
         null
+    );
+    task.setPollRetryMs(POLL_RETRY_MS);
+    return task;
+  }
+
+  private static DataSchema cloneDataSchema(final DataSchema dataSchema)
+  {
+    return new DataSchema(
+        dataSchema.getDataSource(),
+        dataSchema.getParserMap(),
+        dataSchema.getAggregators(),
+        dataSchema.getGranularitySpec(),
+        dataSchema.getTransformSpec(),
+        objectMapper
     );
   }
 
   private QueryRunnerFactoryConglomerate makeTimeseriesOnlyConglomerate()
   {
+    IntervalChunkingQueryRunnerDecorator queryRunnerDecorator = new IntervalChunkingQueryRunnerDecorator(
+        null,
+        null,
+        null
+    )
+    {
+      @Override
+      public <T> QueryRunner<T> decorate(
+          QueryRunner<T> delegate, QueryToolChest<T, ? extends Query<T>> toolChest
+      )
+      {
+        return delegate;
+      }
+    };
     return new DefaultQueryRunnerFactoryConglomerate(
         ImmutableMap.<Class<? extends Query>, QueryRunnerFactory>of(
             TimeseriesQuery.class,
             new TimeseriesQueryRunnerFactory(
-                new TimeseriesQueryQueryToolChest(
-                    new IntervalChunkingQueryRunnerDecorator(null, null, null)
-                    {
-                      @Override
-                      public <T> QueryRunner<T> decorate(
-                          QueryRunner<T> delegate, QueryToolChest<T, ? extends Query<T>> toolChest
-                      )
-                      {
-                        return delegate;
-                      }
-                    }
-                ),
+                new TimeseriesQueryQueryToolChest(queryRunnerDecorator),
                 new TimeseriesQueryEngine(),
                 new QueryWatcher()
                 {
@@ -1383,7 +1631,8 @@ public class KafkaIndexTaskTest
     final TaskActionToolbox taskActionToolbox = new TaskActionToolbox(
         taskLockbox,
         metadataStorageCoordinator,
-        emitter
+        emitter,
+        new SupervisorManager(null)
     );
     final TaskActionClientFactory taskActionClientFactory = new LocalTaskActionClientFactory(
         taskStorage,
@@ -1425,6 +1674,14 @@ public class KafkaIndexTaskTest
     final LocalDataSegmentPusherConfig dataSegmentPusherConfig = new LocalDataSegmentPusherConfig();
     dataSegmentPusherConfig.storageDirectory = getSegmentDirectory();
     final DataSegmentPusher dataSegmentPusher = new LocalDataSegmentPusher(dataSegmentPusherConfig, objectMapper);
+    SegmentLoaderConfig segmentLoaderConfig = new SegmentLoaderConfig()
+    {
+      @Override
+      public List<StorageLocationConfig> getLocations()
+      {
+        return Lists.newArrayList();
+      }
+    };
     toolboxFactory = new TaskToolboxFactory(
         taskConfig,
         taskActionClientFactory,
@@ -1434,29 +1691,23 @@ public class KafkaIndexTaskTest
         null, // DataSegmentMover
         null, // DataSegmentArchiver
         new TestDataSegmentAnnouncer(),
+        EasyMock.createNiceMock(DataSegmentServerAnnouncer.class),
         handoffNotifierFactory,
-        makeTimeseriesOnlyConglomerate(),
+        this::makeTimeseriesOnlyConglomerate,
         MoreExecutors.sameThreadExecutor(), // queryExecutorService
         EasyMock.createMock(MonitorScheduler.class),
         new SegmentLoaderFactory(
-            new SegmentLoaderLocalCacheManager(
-                null,
-                new SegmentLoaderConfig()
-                {
-                  @Override
-                  public List<StorageLocationConfig> getLocations()
-                  {
-                    return Lists.newArrayList();
-                  }
-                }, testUtils.getTestObjectMapper()
-            )
+            new SegmentLoaderLocalCacheManager(null, segmentLoaderConfig, testUtils.getTestObjectMapper())
         ),
         testUtils.getTestObjectMapper(),
-        testUtils.getTestIndexMerger(),
         testUtils.getTestIndexIO(),
         MapCache.create(1024),
         new CacheConfig(),
-        testUtils.getTestIndexMergerV9()
+        testUtils.getTestIndexMergerV9(),
+        EasyMock.createNiceMock(DruidNodeAnnouncer.class),
+        EasyMock.createNiceMock(DruidNode.class),
+        new LookupNodeService("tier"),
+        new DataNodeService("tier", 1, ServerType.INDEXER_EXECUTOR, 0)
     );
   }
 
@@ -1473,7 +1724,7 @@ public class KafkaIndexTaskTest
     return FluentIterable.from(
         metadataStorageCoordinator.getUsedSegmentsForInterval(
             DATA_SCHEMA.getDataSource(),
-            new Interval("0000/3000")
+            Intervals.of("0000/3000")
         )
     ).transform(
         new Function<DataSegment, SegmentDescriptor>()
@@ -1492,10 +1743,10 @@ public class KafkaIndexTaskTest
     return new File(directory, "segments");
   }
 
-  private List<String> readSegmentDim1(final SegmentDescriptor descriptor) throws IOException
+  private List<String> readSegmentColumn(final String column, final SegmentDescriptor descriptor) throws IOException
   {
     File indexZip = new File(
-        String.format(
+        StringUtils.format(
             "%s/%s/%s_%s/%s/%d/index.zip",
             getSegmentDirectory(),
             DATA_SCHEMA.getDataSource(),
@@ -1507,7 +1758,7 @@ public class KafkaIndexTaskTest
     );
     File outputLocation = new File(
         directory,
-        String.format(
+        StringUtils.format(
             "%s_%s_%s_%s",
             descriptor.getInterval().getStart(),
             descriptor.getInterval().getEnd(),
@@ -1524,11 +1775,11 @@ public class KafkaIndexTaskTest
     );
     IndexIO indexIO = new TestUtils().getTestIndexIO();
     QueryableIndex index = indexIO.loadIndex(outputLocation);
-    DictionaryEncodedColumn<String> dim1 = index.getColumn("dim1").getDictionaryEncoding();
+    DictionaryEncodedColumn<String> theColumn = index.getColumn(column).getDictionaryEncoding();
     List<String> values = Lists.newArrayList();
-    for (int i = 0; i < dim1.length(); i++) {
-      int id = dim1.getSingleValueRow(i);
-      String value = dim1.lookupName(id);
+    for (int i = 0; i < theColumn.length(); i++) {
+      int id = theColumn.getSingleValueRow(i);
+      String value = theColumn.lookupName(id);
       values.add(value);
     }
     return values;
@@ -1543,12 +1794,12 @@ public class KafkaIndexTaskTest
                                       ImmutableList.<AggregatorFactory>of(
                                           new LongSumAggregatorFactory("rows", "rows")
                                       )
-                                  ).granularity(QueryGranularities.ALL)
+                                  ).granularity(Granularities.ALL)
                                   .intervals("0000/3000")
                                   .build();
 
     ArrayList<Result<TimeseriesResultValue>> results = Sequences.toList(
-        task.getQueryRunner(query).run(query, ImmutableMap.<String, Object>of()),
+        task.getQueryRunner(query).run(QueryPlus.wrap(query), ImmutableMap.<String, Object>of()),
         Lists.<Result<TimeseriesResultValue>>newArrayList()
     );
 
@@ -1569,7 +1820,7 @@ public class KafkaIndexTaskTest
 
   private SegmentDescriptor SD(final Task task, final String intervalString, final int partitionNum)
   {
-    final Interval interval = new Interval(intervalString);
+    final Interval interval = Intervals.of(intervalString);
     return new SegmentDescriptor(interval, getLock(task, interval).getVersion(), partitionNum);
   }
 }

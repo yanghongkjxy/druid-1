@@ -19,11 +19,12 @@
 
 package io.druid.segment;
 
-import com.metamx.common.IAE;
-import com.metamx.common.guava.MergeIterator;
-import it.unimi.dsi.fastutil.ints.AbstractIntIterator;
+import io.druid.java.util.common.IAE;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntIterator;
 import it.unimi.dsi.fastutil.ints.IntIterators;
+import it.unimi.dsi.fastutil.ints.IntList;
+import it.unimi.dsi.fastutil.ints.IntLists;
 import it.unimi.dsi.fastutil.longs.LongHeaps;
 
 import java.util.List;
@@ -41,7 +42,7 @@ public final class IntIteratorUtils
     }
     int skipped = 0;
     while (skipped < n && it.hasNext()) {
-      it.next();
+      it.nextInt();
       skipped++;
     }
     return skipped;
@@ -52,7 +53,8 @@ public final class IntIteratorUtils
    * It isn't checked if the given source iterators are actually ascending, if they are not, the order of values in the
    * returned iterator is undefined.
    * <p>
-   * This is similar to what {@link MergeIterator} does with simple {@link java.util.Iterator}s.
+   * This is similar to what {@link io.druid.java.util.common.guava.MergeIterator} does with simple
+   * {@link java.util.Iterator}s.
    *
    * @param iterators iterators to merge, must return ascending values
    */
@@ -68,7 +70,8 @@ public final class IntIteratorUtils
   }
 
   /**
-   * This class is designed mostly after {@link MergeIterator}. {@code MergeIterator} uses a priority queue of wrapper
+   * This class is designed mostly after {@link io.druid.java.util.common.guava.MergeIterator}.
+   * {@code MergeIterator} uses a priority queue of wrapper
    * "peeking" iterators. Peeking wrappers are not available in fastutil for specialized iterators like IntIterator, so
    * they should be implemented manually in the druid codebase. Instead, another approach is taken: a priority queue
    * of primitive long values is used, in long values the high 32-bits is the last value from some iterator, and the low
@@ -80,7 +83,7 @@ public final class IntIteratorUtils
    * level, to avoid heap array shuffling on each iteration with dequeue and than enqueue, when merged iterators tend
    * to stay in the head of the heap for at least several iterations.
    */
-  static final class MergeIntIterator extends AbstractIntIterator
+  static final class MergeIntIterator implements IntIterator
   {
 
     private final IntIterator[] iterators;
@@ -165,7 +168,7 @@ public final class IntIteratorUtils
     return new RoaringBitmapDelegatingIntIterator(iterator);
   }
 
-  private static class RoaringBitmapDelegatingIntIterator extends AbstractIntIterator
+  private static class RoaringBitmapDelegatingIntIterator implements IntIterator
   {
     private final org.roaringbitmap.IntIterator delegate;
 
@@ -191,6 +194,15 @@ public final class IntIteratorUtils
     {
       return IntIteratorUtils.skip(this, n);
     }
+  }
+
+  public static IntList toIntList(IntIterator iterator)
+  {
+    final IntList integers = new IntArrayList();
+    while (iterator.hasNext()) {
+      integers.add(iterator.nextInt());
+    }
+    return IntLists.unmodifiable(integers);
   }
 
   private IntIteratorUtils() {}

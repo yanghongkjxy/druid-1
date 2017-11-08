@@ -22,10 +22,10 @@ package io.druid.segment.data;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.Ordering;
-import com.metamx.collections.bitmap.BitmapFactory;
-import com.metamx.collections.bitmap.ImmutableBitmap;
-import com.metamx.collections.bitmap.RoaringBitmapFactory;
-import com.metamx.collections.bitmap.WrappedImmutableRoaringBitmap;
+import io.druid.collections.bitmap.BitmapFactory;
+import io.druid.collections.bitmap.ImmutableBitmap;
+import io.druid.collections.bitmap.RoaringBitmapFactory;
+import io.druid.collections.bitmap.WrappedImmutableRoaringBitmap;
 import org.roaringbitmap.buffer.ImmutableRoaringBitmap;
 
 import java.nio.ByteBuffer;
@@ -69,20 +69,20 @@ public class RoaringBitmapSerdeFactory implements BitmapSerdeFactory
     return bitmapFactory;
   }
 
-  private static Ordering<WrappedImmutableRoaringBitmap> roaringComparator = new Ordering<WrappedImmutableRoaringBitmap>()
+  private static final Ordering<WrappedImmutableRoaringBitmap> RORING_COMPARATOR = new Ordering<WrappedImmutableRoaringBitmap>()
   {
     @Override
     public int compare(
         WrappedImmutableRoaringBitmap set1, WrappedImmutableRoaringBitmap set2
     )
     {
-      if (set1.size() == 0 && set2.size() == 0) {
+      if (set1.isEmpty() && set2.isEmpty()) {
         return 0;
       }
-      if (set1.size() == 0) {
+      if (set1.isEmpty()) {
         return -1;
       }
-      if (set2.size() == 0) {
+      if (set2.isEmpty()) {
         return 1;
       }
 
@@ -102,9 +102,8 @@ public class RoaringBitmapSerdeFactory implements BitmapSerdeFactory
     @Override
     public ImmutableBitmap fromByteBuffer(ByteBuffer buffer, int numBytes)
     {
-      final ByteBuffer readOnlyBuffer = buffer.asReadOnlyBuffer();
-      readOnlyBuffer.limit(readOnlyBuffer.position() + numBytes);
-      return new WrappedImmutableRoaringBitmap(new ImmutableRoaringBitmap(readOnlyBuffer));
+      buffer.limit(buffer.position() + numBytes);
+      return new WrappedImmutableRoaringBitmap(new ImmutableRoaringBitmap(buffer));
     }
 
     @Override
@@ -119,7 +118,7 @@ public class RoaringBitmapSerdeFactory implements BitmapSerdeFactory
     @Override
     public int compare(ImmutableBitmap o1, ImmutableBitmap o2)
     {
-      return roaringComparator.compare((WrappedImmutableRoaringBitmap) o1, (WrappedImmutableRoaringBitmap) o2);
+      return RORING_COMPARATOR.compare((WrappedImmutableRoaringBitmap) o1, (WrappedImmutableRoaringBitmap) o2);
     }
   }
 

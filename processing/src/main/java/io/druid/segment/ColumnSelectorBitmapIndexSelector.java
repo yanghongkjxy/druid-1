@@ -20,10 +20,11 @@
 package io.druid.segment;
 
 import com.google.common.base.Strings;
-import com.metamx.collections.bitmap.BitmapFactory;
-import com.metamx.collections.bitmap.ImmutableBitmap;
-import com.metamx.collections.spatial.ImmutableRTree;
+import io.druid.collections.bitmap.BitmapFactory;
+import io.druid.collections.bitmap.ImmutableBitmap;
+import io.druid.collections.spatial.ImmutableRTree;
 import io.druid.query.filter.BitmapIndexSelector;
+import io.druid.query.monomorphicprocessing.RuntimeShapeInspector;
 import io.druid.segment.column.BitmapIndex;
 import io.druid.segment.column.Column;
 import io.druid.segment.column.DictionaryEncodedColumn;
@@ -40,20 +41,28 @@ import java.util.Iterator;
 public class ColumnSelectorBitmapIndexSelector implements BitmapIndexSelector
 {
   private final BitmapFactory bitmapFactory;
+  private final VirtualColumns virtualColumns;
   private final ColumnSelector index;
 
   public ColumnSelectorBitmapIndexSelector(
       final BitmapFactory bitmapFactory,
+      final VirtualColumns virtualColumns,
       final ColumnSelector index
   )
   {
     this.bitmapFactory = bitmapFactory;
+    this.virtualColumns = virtualColumns;
     this.index = index;
   }
 
   @Override
   public Indexed<String> getDimensionValues(String dimension)
   {
+    if (isVirtualColumn(dimension)) {
+      // Virtual columns don't have dictionaries or indexes.
+      return null;
+    }
+
     final Column columnDesc = index.getColumn(dimension);
     if (columnDesc == null || !columnDesc.getCapabilities().isDictionaryEncoded()) {
       return null;
@@ -90,7 +99,24 @@ public class ColumnSelectorBitmapIndexSelector implements BitmapIndexSelector
       {
         return IndexedIterable.create(this).iterator();
       }
+
+      @Override
+      public void inspectRuntimeShape(RuntimeShapeInspector inspector)
+      {
+        inspector.visit("column", column);
+      }
     };
+  }
+
+  @Override
+  public boolean hasMultipleValues(final String dimension)
+  {
+    if (isVirtualColumn(dimension)) {
+      return virtualColumns.getVirtualColumn(dimension).capabilities(dimension).hasMultipleValues();
+    }
+
+    final Column column = index.getColumn(dimension);
+    return column != null && column.getCapabilities().hasMultipleValues();
   }
 
   @Override
@@ -110,6 +136,11 @@ public class ColumnSelectorBitmapIndexSelector implements BitmapIndexSelector
   @Override
   public BitmapIndex getBitmapIndex(String dimension)
   {
+    if (isVirtualColumn(dimension)) {
+      // Virtual columns don't have dictionaries or indexes.
+      return null;
+    }
+
     final Column column = index.getColumn(dimension);
     if (column == null || !columnSupportsFiltering(column)) {
       // for missing columns and columns with types that do not support filtering,
@@ -172,6 +203,11 @@ public class ColumnSelectorBitmapIndexSelector implements BitmapIndexSelector
   @Override
   public ImmutableBitmap getBitmapIndex(String dimension, String value)
   {
+    if (isVirtualColumn(dimension)) {
+      // Virtual columns don't have dictionaries or indexes.
+      return null;
+    }
+
     final Column column = index.getColumn(dimension);
     if (column == null || !columnSupportsFiltering(column)) {
       if (Strings.isNullOrEmpty(value)) {
@@ -192,12 +228,21 @@ public class ColumnSelectorBitmapIndexSelector implements BitmapIndexSelector
   @Override
   public ImmutableRTree getSpatialIndex(String dimension)
   {
+    if (isVirtualColumn(dimension)) {
+      return new ImmutableRTree();
+    }
+
     final Column column = index.getColumn(dimension);
     if (column == null || !column.getCapabilities().hasSpatialIndexes()) {
       return new ImmutableRTree();
     }
 
     return column.getSpatialIndex().getRTree();
+  }
+
+  private boolean isVirtualColumn(final String columnName)
+  {
+    return virtualColumns.getVirtualColumn(columnName) != null;
   }
 
   private static boolean columnSupportsFiltering(Column column)

@@ -35,7 +35,6 @@ import com.google.common.primitives.Ints;
 import com.metamx.emitter.service.ServiceEmitter;
 import com.metamx.emitter.service.ServiceMetricEvent;
 import com.metamx.metrics.AbstractMonitor;
-import io.druid.collections.LoadBalancingPool;
 import io.druid.collections.ResourceHolder;
 import io.druid.collections.StupidResourceHolder;
 import io.druid.java.util.common.logger.Logger;
@@ -75,6 +74,12 @@ public class MemcachedCache implements Cache
 {
   private static final Logger log = new Logger(MemcachedCache.class);
 
+  /**
+   * Default hash algorithm for cache distribution.
+   *
+   * If some other algorithms are considered as the default algorithm instead of this one, the cache distribution for
+   * those hash algorithms should be checked and compared using {@code CacheDistributionTest}.
+   */
   final static HashAlgorithm MURMUR3_128 = new HashAlgorithm()
   {
     final HashFunction fn = Hashing.murmur3_128();
@@ -359,7 +364,7 @@ public class MemcachedCache implements Cache
       final Supplier<ResourceHolder<MemcachedClientIF>> clientSupplier;
 
       if (config.getNumConnections() > 1) {
-        clientSupplier = new LoadBalancingPool<MemcachedClientIF>(
+        clientSupplier = new MemcacheClientPool(
             config.getNumConnections(),
             new Supplier<MemcachedClientIF>()
             {
@@ -410,7 +415,7 @@ public class MemcachedCache implements Cache
   {
     Preconditions.checkArgument(
         config.getMemcachedPrefix().length() <= MAX_PREFIX_LENGTH,
-        "memcachedPrefix length [%d] exceeds maximum length [%d]",
+        "memcachedPrefix length [%s] exceeds maximum length [%s]",
         config.getMemcachedPrefix().length(),
         MAX_PREFIX_LENGTH
     );
@@ -595,8 +600,7 @@ public class MemcachedCache implements Cache
       MemcachedClientIF.MAX_KEY_LENGTH
       - 40 // length of namespace hash
       - 40 // length of key hash
-      - 2  // length of separators
-      ;
+      - 2; // length of separators
 
   private static String computeKeyHash(String memcachedPrefix, NamedKey key)
   {
@@ -604,6 +608,7 @@ public class MemcachedCache implements Cache
     return memcachedPrefix + ":" + DigestUtils.sha1Hex(key.namespace) + ":" + DigestUtils.sha1Hex(key.key);
   }
 
+  @Override
   public boolean isLocal()
   {
     return false;

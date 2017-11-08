@@ -40,11 +40,14 @@ import java.io.FilterInputStream;
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
@@ -53,8 +56,6 @@ import java.util.zip.GZIPOutputStream;
 
 public class CompressionUtilsTest
 {
-  @Rule
-  public final TemporaryFolder temporaryFolder = new TemporaryFolder();
   private static final String content;
   private static final byte[] expected;
   private static final byte[] gzBytes;
@@ -62,7 +63,9 @@ public class CompressionUtilsTest
   static {
     final StringBuilder builder = new StringBuilder();
     try (InputStream stream = CompressionUtilsTest.class.getClassLoader().getResourceAsStream("loremipsum.txt")) {
-      final Iterator<String> it = new java.util.Scanner(stream).useDelimiter(Pattern.quote("|"));
+      final Iterator<String> it = new Scanner(
+          new InputStreamReader(stream, StandardCharsets.UTF_8)
+      ).useDelimiter(Pattern.quote("|"));
       while (it.hasNext()) {
         builder.append(it.next());
       }
@@ -85,8 +88,18 @@ public class CompressionUtilsTest
     gzBytes = gzByteStream.toByteArray();
   }
 
+  @Rule
+  public final TemporaryFolder temporaryFolder = new TemporaryFolder();
   private File testDir;
   private File testFile;
+
+  public static void assertGoodDataStream(InputStream stream) throws IOException
+  {
+    try (final ByteArrayOutputStream bos = new ByteArrayOutputStream(expected.length)) {
+      ByteStreams.copy(stream, bos);
+      Assert.assertArrayEquals(expected, bos.toByteArray());
+    }
+  }
 
   @Before
   public void setUp() throws IOException
@@ -97,14 +110,6 @@ public class CompressionUtilsTest
       outputStream.write(StringUtils.toUtf8(content));
     }
     Assert.assertTrue(testFile.getParentFile().equals(testDir));
-  }
-
-  public static void assertGoodDataStream(InputStream stream) throws IOException
-  {
-    try (final ByteArrayOutputStream bos = new ByteArrayOutputStream(expected.length)) {
-      ByteStreams.copy(stream, bos);
-      Assert.assertArrayEquals(expected, bos.toByteArray());
-    }
   }
 
   @Test
@@ -131,15 +136,24 @@ public class CompressionUtilsTest
   {
     final File tmpDir = temporaryFolder.newFolder("testGoodZipCompressUncompress");
     final File zipFile = new File(tmpDir, "compressionUtilTest.zip");
-    zipFile.deleteOnExit();
-    CompressionUtils.zip(testDir, zipFile);
-    final File newDir = new File(tmpDir, "newDir");
-    newDir.mkdir();
-    CompressionUtils.unzip(zipFile, newDir);
-    final Path newPath = Paths.get(newDir.getAbsolutePath(), testFile.getName());
-    Assert.assertTrue(newPath.toFile().exists());
-    try (final FileInputStream inputStream = new FileInputStream(newPath.toFile())) {
-      assertGoodDataStream(inputStream);
+    try {
+      CompressionUtils.zip(testDir, zipFile);
+      final File newDir = new File(tmpDir, "newDir");
+      newDir.mkdir();
+      CompressionUtils.unzip(zipFile, newDir);
+      final Path newPath = Paths.get(newDir.getAbsolutePath(), testFile.getName());
+      Assert.assertTrue(newPath.toFile().exists());
+      try (final FileInputStream inputStream = new FileInputStream(newPath.toFile())) {
+        assertGoodDataStream(inputStream);
+      }
+    }
+    finally {
+      if (zipFile.exists()) {
+        zipFile.delete();
+      }
+      if (tmpDir.exists()) {
+        tmpDir.delete();
+      }
     }
   }
 
@@ -220,7 +234,7 @@ public class CompressionUtilsTest
       assertGoodDataStream(inputStream);
     }
     if (!testFile.delete()) {
-      throw new IOException(String.format("Unable to delete file [%s]", testFile.getAbsolutePath()));
+      throw new IOE("Unable to delete file [%s]", testFile.getAbsolutePath());
     }
     Assert.assertFalse(testFile.exists());
     CompressionUtils.gunzip(Files.asByteSource(gzFile), testFile);
@@ -242,7 +256,7 @@ public class CompressionUtilsTest
       assertGoodDataStream(inputStream);
     }
     if (!testFile.delete()) {
-      throw new IOException(String.format("Unable to delete file [%s]", testFile.getAbsolutePath()));
+      throw new IOE("Unable to delete file [%s]", testFile.getAbsolutePath());
     }
     Assert.assertFalse(testFile.exists());
     CompressionUtils.gunzip(new FileInputStream(gzFile), testFile);
@@ -251,53 +265,6 @@ public class CompressionUtilsTest
       assertGoodDataStream(inputStream);
     }
   }
-
-  private static class ZeroRemainingInputStream extends FilterInputStream
-  {
-    private final AtomicInteger pos = new AtomicInteger(0);
-
-    protected ZeroRemainingInputStream(InputStream in)
-    {
-      super(in);
-    }
-
-    @Override
-    public synchronized void reset() throws IOException
-    {
-      super.reset();
-      pos.set(0);
-    }
-
-    @Override
-    public int read(byte b[]) throws IOException
-    {
-      final int len = Math.min(b.length, gzBytes.length - pos.get() % gzBytes.length);
-      pos.addAndGet(len);
-      return read(b, 0, len);
-    }
-
-    @Override
-    public int read() throws IOException
-    {
-      pos.incrementAndGet();
-      return super.read();
-    }
-
-    @Override
-    public int read(byte b[], int off, int len) throws IOException
-    {
-      final int l = Math.min(len, gzBytes.length - pos.get() % gzBytes.length);
-      pos.addAndGet(l);
-      return super.read(b, off, l);
-    }
-
-    @Override
-    public int available() throws IOException
-    {
-      return 0;
-    }
-  }
-
 
   @Test
   // Sanity check to make sure the test class works as expected
@@ -332,7 +299,7 @@ public class CompressionUtilsTest
         final byte[] bytes = new byte[gzBytes.length];
         Assert.assertEquals(bytes.length, inputStream.read(bytes));
         Assert.assertArrayEquals(
-            String.format("Failed on range %d", i),
+            StringUtils.format("Failed on range %d", i),
             gzBytes,
             bytes
         );
@@ -341,7 +308,7 @@ public class CompressionUtilsTest
   }
 
   // If this ever passes, er... fails to fail... then the bug is fixed
-  @Test(expected = java.lang.AssertionError.class)
+  @Test(expected = AssertionError.class)
   // http://bugs.java.com/bugdatabase/view_bug.do?bug_id=7036144
   public void testGunzipBug() throws IOException
   {
@@ -409,7 +376,6 @@ public class CompressionUtilsTest
       }
     }
   }
-
 
   @Test
   // http://bugs.java.com/bugdatabase/view_bug.do?bug_id=7036144
@@ -528,7 +494,7 @@ public class CompressionUtilsTest
       assertGoodDataStream(inputStream);
     }
     if (!testFile.delete()) {
-      throw new IOException(String.format("Unable to delete file [%s]", testFile.getAbsolutePath()));
+      throw new IOE("Unable to delete file [%s]", testFile.getAbsolutePath());
     }
     Assert.assertFalse(testFile.exists());
     CompressionUtils.gunzip(Files.asByteSource(gzFile), testFile);
@@ -538,7 +504,6 @@ public class CompressionUtilsTest
     }
     Assert.assertEquals(4, flushes.get()); // 2 for suppressed closes, 2 for manual calls to shake out errors
   }
-
 
   @Test(expected = IOException.class)
   public void testStreamErrorGzip() throws Exception
@@ -575,7 +540,7 @@ public class CompressionUtilsTest
       assertGoodDataStream(inputStream);
     }
     if (testFile.exists() && !testFile.delete()) {
-      throw new RuntimeException(String.format("Unable to delete file [%s]", testFile.getAbsolutePath()));
+      throw new RE("Unable to delete file [%s]", testFile.getAbsolutePath());
     }
     Assert.assertFalse(testFile.exists());
     final AtomicLong flushes = new AtomicLong(0L);
@@ -595,5 +560,51 @@ public class CompressionUtilsTest
             }
         )
     );
+  }
+
+  private static class ZeroRemainingInputStream extends FilterInputStream
+  {
+    private final AtomicInteger pos = new AtomicInteger(0);
+
+    protected ZeroRemainingInputStream(InputStream in)
+    {
+      super(in);
+    }
+
+    @Override
+    public synchronized void reset() throws IOException
+    {
+      super.reset();
+      pos.set(0);
+    }
+
+    @Override
+    public int read(byte b[]) throws IOException
+    {
+      final int len = Math.min(b.length, gzBytes.length - pos.get() % gzBytes.length);
+      pos.addAndGet(len);
+      return read(b, 0, len);
+    }
+
+    @Override
+    public int read() throws IOException
+    {
+      pos.incrementAndGet();
+      return super.read();
+    }
+
+    @Override
+    public int read(byte b[], int off, int len) throws IOException
+    {
+      final int l = Math.min(len, gzBytes.length - pos.get() % gzBytes.length);
+      pos.addAndGet(l);
+      return super.read(b, off, l);
+    }
+
+    @Override
+    public int available() throws IOException
+    {
+      return 0;
+    }
   }
 }

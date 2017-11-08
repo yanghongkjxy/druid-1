@@ -20,28 +20,24 @@
 package io.druid.benchmark.indexing;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.hash.Hashing;
 import com.google.common.io.Files;
-
 import io.druid.benchmark.datagen.BenchmarkDataGenerator;
 import io.druid.benchmark.datagen.BenchmarkSchemaInfo;
 import io.druid.benchmark.datagen.BenchmarkSchemas;
 import io.druid.data.input.InputRow;
-import io.druid.data.input.impl.DimensionsSpec;
-import io.druid.granularity.QueryGranularities;
+import io.druid.hll.HyperLogLogHash;
 import io.druid.jackson.DefaultObjectMapper;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.query.aggregation.hyperloglog.HyperUniquesSerde;
 import io.druid.segment.IndexIO;
-import io.druid.segment.IndexMerger;
 import io.druid.segment.IndexMergerV9;
 import io.druid.segment.IndexSpec;
 import io.druid.segment.QueryableIndex;
 import io.druid.segment.column.ColumnConfig;
 import io.druid.segment.incremental.IncrementalIndex;
 import io.druid.segment.incremental.IncrementalIndexSchema;
-import io.druid.segment.incremental.OnheapIncrementalIndex;
 import io.druid.segment.serde.ComplexMetrics;
+import org.apache.commons.io.FileUtils;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -52,6 +48,7 @@ import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
@@ -62,7 +59,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @State(Scope.Benchmark)
-@Fork(jvmArgsPrepend = "-server", value = 1)
+@Fork(value = 1)
 @Warmup(iterations = 10)
 @Measurement(iterations = 25)
 public class IndexMergeBenchmark
@@ -81,13 +78,13 @@ public class IndexMergeBenchmark
 
   private static final Logger log = new Logger(IndexMergeBenchmark.class);
   private static final int RNG_SEED = 9999;
-  private static final IndexMerger INDEX_MERGER;
   private static final IndexMergerV9 INDEX_MERGER_V9;
   private static final IndexIO INDEX_IO;
   public static final ObjectMapper JSON_MAPPER;
 
   private List<QueryableIndex> indexesToMerge;
   private BenchmarkSchemaInfo schemaInfo;
+  private File tmpDir;
 
   static {
     JSON_MAPPER = new DefaultObjectMapper();
@@ -102,17 +99,16 @@ public class IndexMergeBenchmark
           }
         }
     );
-    INDEX_MERGER = new IndexMerger(JSON_MAPPER, INDEX_IO);
     INDEX_MERGER_V9 = new IndexMergerV9(JSON_MAPPER, INDEX_IO);
   }
 
   @Setup
   public void setup() throws IOException
   {
-    log.info("SETUP CALLED AT " + + System.currentTimeMillis());
+    log.info("SETUP CALLED AT " + System.currentTimeMillis());
 
     if (ComplexMetrics.getSerdeForType("hyperUnique") == null) {
-      ComplexMetrics.registerSerde("hyperUnique", new HyperUniquesSerde(Hashing.murmur3_128()));
+      ComplexMetrics.registerSerde("hyperUnique", new HyperUniquesSerde(HyperLogLogHash.getDefault()));
     }
 
     indexesToMerge = new ArrayList<>();
@@ -137,13 +133,12 @@ public class IndexMergeBenchmark
         incIndex.add(row);
       }
 
-      File tmpFile = Files.createTempDir();
-      log.info("Using temp dir: " + tmpFile.getAbsolutePath());
-      tmpFile.deleteOnExit();
+      tmpDir = Files.createTempDir();
+      log.info("Using temp dir: " + tmpDir.getAbsolutePath());
 
       File indexFile = INDEX_MERGER_V9.persist(
           incIndex,
-          tmpFile,
+          tmpDir,
           new IndexSpec()
       );
 
@@ -152,38 +147,24 @@ public class IndexMergeBenchmark
     }
   }
 
-  private IncrementalIndex makeIncIndex()
+  @TearDown
+  public void tearDown() throws IOException
   {
-    return new OnheapIncrementalIndex(
-        new IncrementalIndexSchema.Builder()
-            .withQueryGranularity(QueryGranularities.NONE)
-            .withMetrics(schemaInfo.getAggsArray())
-            .withDimensionsSpec(new DimensionsSpec(null, null, null))
-            .withRollup(rollup)
-            .build(),
-        true,
-        false,
-        true,
-        rowsPerSegment
-    );
+    FileUtils.deleteDirectory(tmpDir);
   }
 
-  @Benchmark
-  @BenchmarkMode(Mode.AverageTime)
-  @OutputTimeUnit(TimeUnit.MICROSECONDS)
-  public void merge(Blackhole blackhole) throws Exception
+  private IncrementalIndex makeIncIndex()
   {
-    File tmpFile = File.createTempFile("IndexMergeBenchmark-MERGEDFILE-" + System.currentTimeMillis(), ".TEMPFILE");
-    tmpFile.delete();
-    tmpFile.mkdirs();
-    log.info(tmpFile.getAbsolutePath() + " isFile: " + tmpFile.isFile() + " isDir:" + tmpFile.isDirectory());
-    tmpFile.deleteOnExit();
-
-    File mergedFile = INDEX_MERGER.mergeQueryableIndex(indexesToMerge, rollup, schemaInfo.getAggsArray(), tmpFile, new IndexSpec());
-
-    blackhole.consume(mergedFile);
-
-    tmpFile.delete();
+    return new IncrementalIndex.Builder()
+        .setIndexSchema(
+            new IncrementalIndexSchema.Builder()
+            .withMetrics(schemaInfo.getAggsArray())
+            .withRollup(rollup)
+            .build()
+        )
+        .setReportParseExceptions(false)
+        .setMaxRowCount(rowsPerSegment)
+        .buildOnheap();
   }
 
   @Benchmark
@@ -194,13 +175,23 @@ public class IndexMergeBenchmark
     File tmpFile = File.createTempFile("IndexMergeBenchmark-MERGEDFILE-V9-" + System.currentTimeMillis(), ".TEMPFILE");
     tmpFile.delete();
     tmpFile.mkdirs();
-    log.info(tmpFile.getAbsolutePath() + " isFile: " + tmpFile.isFile() + " isDir:" + tmpFile.isDirectory());
-    tmpFile.deleteOnExit();
+    try {
+      log.info(tmpFile.getAbsolutePath() + " isFile: " + tmpFile.isFile() + " isDir:" + tmpFile.isDirectory());
 
-    File mergedFile = INDEX_MERGER_V9.mergeQueryableIndex(indexesToMerge, rollup, schemaInfo.getAggsArray(), tmpFile, new IndexSpec());
+      File mergedFile = INDEX_MERGER_V9.mergeQueryableIndex(
+          indexesToMerge,
+          rollup,
+          schemaInfo.getAggsArray(),
+          tmpFile,
+          new IndexSpec()
+      );
 
-    blackhole.consume(mergedFile);
+      blackhole.consume(mergedFile);
+    }
+    finally {
+      tmpFile.delete();
 
-    tmpFile.delete();
+    }
+
   }
 }

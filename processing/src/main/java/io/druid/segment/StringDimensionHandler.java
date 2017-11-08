@@ -32,7 +32,6 @@ import java.io.Closeable;
 import java.io.File;
 import java.lang.reflect.Array;
 import java.util.Arrays;
-import java.util.Comparator;
 
 public class StringDimensionHandler implements DimensionHandler<Integer, int[], String>
 {
@@ -52,13 +51,19 @@ public class StringDimensionHandler implements DimensionHandler<Integer, int[], 
   }
 
   @Override
-  public int getLengthFromEncodedArray(int[] dimVals)
+  public MultiValueHandling getMultivalueHandling()
+  {
+    return multiValueHandling;
+  }
+
+  @Override
+  public int getLengthOfEncodedKeyComponent(int[] dimVals)
   {
     return dimVals.length;
   }
 
   @Override
-  public int compareSortedEncodedArrays(int[] lhs, int[] rhs)
+  public int compareSortedEncodedKeyComponents(int[] lhs, int[] rhs)
   {
     int lhsLen = lhs.length;
     int rhsLen = rhs.length;
@@ -74,7 +79,7 @@ public class StringDimensionHandler implements DimensionHandler<Integer, int[], 
   }
 
   @Override
-  public void validateSortedEncodedArrays(
+  public void validateSortedEncodedKeyComponents(
       int[] lhs,
       int[] rhs,
       Indexed<String> lhsEncodings,
@@ -82,7 +87,7 @@ public class StringDimensionHandler implements DimensionHandler<Integer, int[], 
   ) throws SegmentValidationException
   {
     if (lhs == null || rhs == null) {
-      if (lhs != rhs) {
+      if (lhs != null || rhs != null) {
         throw new SegmentValidationException(
             "Expected nulls, found %s and %s",
             Arrays.toString(lhs),
@@ -120,23 +125,19 @@ public class StringDimensionHandler implements DimensionHandler<Integer, int[], 
               dimValName
           );
         }
+      } else {
+        throw new SegmentValidationException(
+            "Dim [%s] value lengths not equal. Expected %d found %d",
+            dimensionName,
+            lhsLen,
+            rhsLen
+        );
       }
-    } else {
-      throw new SegmentValidationException(
-          "Dim [%s] value lengths not equal. Expected %d found %d",
-          dimensionName,
-          lhsLen,
-          rhsLen
-      );
     }
 
     for (int j = 0; j < Math.max(lhsLen, rhsLen); ++j) {
       final int dIdex1 = lhsLen <= j ? -1 : lhs[j];
       final int dIdex2 = rhsLen <= j ? -1 : rhs[j];
-
-      if (dIdex1 == dIdex2) {
-        continue;
-      }
 
       final String dim1ValName = dIdex1 < 0 ? null : lhsEncodings.get(dIdex1);
       final String dim2ValName = dIdex2 < 0 ? null : rhsEncodings.get(dIdex2);
@@ -171,7 +172,7 @@ public class StringDimensionHandler implements DimensionHandler<Integer, int[], 
   }
 
   @Override
-  public Object getRowValueArrayFromColumn(Closeable column, int currRow)
+  public int[] getEncodedKeyComponentFromColumn(Closeable column, int currRow)
   {
     DictionaryEncodedColumn dict = (DictionaryEncodedColumn) column;
     int[] theVals;
@@ -206,32 +207,5 @@ public class StringDimensionHandler implements DimensionHandler<Integer, int[], 
   {
     return new StringDimensionMergerV9(dimensionName, indexSpec, outDir, ioPeon, capabilities, progress);
   }
-
-  @Override
-  public DimensionMergerLegacy makeLegacyMerger(
-      IndexSpec indexSpec,
-      File outDir,
-      IOPeon ioPeon,
-      ColumnCapabilities capabilities,
-      ProgressIndicator progress
-  )
-  {
-    return new StringDimensionMergerLegacy(dimensionName, indexSpec, outDir, ioPeon, capabilities, progress);
-  }
-
-  public static final Comparator<Integer> ENCODED_COMPARATOR = new Comparator<Integer>()
-  {
-    @Override
-    public int compare(Integer o1, Integer o2)
-    {
-      if (o1 == null) {
-        return o2 == null ? 0 : -1;
-      }
-      if (o2 == null) {
-        return 1;
-      }
-      return o1.compareTo(o2);
-    }
-  };
 
 }

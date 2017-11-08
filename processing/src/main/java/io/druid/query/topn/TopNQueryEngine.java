@@ -22,8 +22,8 @@ package io.druid.query.topn;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
-import io.druid.collections.StupidPool;
-import io.druid.granularity.QueryGranularity;
+import io.druid.collections.NonBlockingPool;
+import io.druid.java.util.common.granularity.Granularity;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
 import io.druid.java.util.common.logger.Logger;
@@ -36,9 +36,12 @@ import io.druid.segment.Cursor;
 import io.druid.segment.SegmentMissingException;
 import io.druid.segment.StorageAdapter;
 import io.druid.segment.column.Column;
+import io.druid.segment.column.ColumnCapabilities;
+import io.druid.segment.column.ValueType;
 import io.druid.segment.filter.Filters;
 import org.joda.time.Interval;
 
+import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
 import java.util.List;
 
@@ -48,14 +51,18 @@ public class TopNQueryEngine
 {
   private static final Logger log = new Logger(TopNQueryEngine.class);
 
-  private final StupidPool<ByteBuffer> bufferPool;
+  private final NonBlockingPool<ByteBuffer> bufferPool;
 
-  public TopNQueryEngine(StupidPool<ByteBuffer> bufferPool)
+  public TopNQueryEngine(NonBlockingPool<ByteBuffer> bufferPool)
   {
     this.bufferPool = bufferPool;
   }
 
-  public Sequence<Result<TopNResultValue>> query(final TopNQuery query, final StorageAdapter adapter)
+  public Sequence<Result<TopNResultValue>> query(
+      final TopNQuery query,
+      final StorageAdapter adapter,
+      final @Nullable TopNQueryMetrics queryMetrics
+  )
   {
     if (adapter == null) {
       throw new SegmentMissingException(
@@ -65,8 +72,8 @@ public class TopNQueryEngine
 
     final List<Interval> queryIntervals = query.getQuerySegmentSpec().getIntervals();
     final Filter filter = Filters.convertToCNFFromQueryContext(query, Filters.toFilter(query.getDimensionsFilter()));
-    final QueryGranularity granularity = query.getGranularity();
-    final Function<Cursor, Result<TopNResultValue>> mapFn = getMapFn(query, adapter);
+    final Granularity granularity = query.getGranularity();
+    final TopNMapFn mapFn = getMapFn(query, adapter, queryMetrics);
 
     Preconditions.checkArgument(
         queryIntervals.size() == 1, "Can only handle a single interval, got[%s]", queryIntervals
@@ -74,14 +81,23 @@ public class TopNQueryEngine
 
     return Sequences.filter(
         Sequences.map(
-            adapter.makeCursors(filter, queryIntervals.get(0), granularity, query.isDescending()),
+            adapter.makeCursors(
+                filter,
+                queryIntervals.get(0),
+                query.getVirtualColumns(),
+                granularity,
+                query.isDescending(),
+                queryMetrics
+            ),
             new Function<Cursor, Result<TopNResultValue>>()
             {
               @Override
               public Result<TopNResultValue> apply(Cursor input)
               {
-                log.debug("Running over cursor[%s]", adapter.getInterval(), input.getTime());
-                return mapFn.apply(input);
+                if (queryMetrics != null) {
+                  queryMetrics.cursor(input);
+                }
+                return mapFn.apply(input, queryMetrics);
               }
             }
         ),
@@ -89,12 +105,18 @@ public class TopNQueryEngine
     );
   }
 
-  private Function<Cursor, Result<TopNResultValue>> getMapFn(TopNQuery query, final StorageAdapter adapter)
+  private TopNMapFn getMapFn(
+      final TopNQuery query,
+      final StorageAdapter adapter,
+      final @Nullable TopNQueryMetrics queryMetrics
+  )
   {
     final Capabilities capabilities = adapter.getCapabilities();
     final String dimension = query.getDimensionSpec().getDimension();
-
     final int cardinality = adapter.getDimensionCardinality(dimension);
+    if (queryMetrics != null) {
+      queryMetrics.dimensionCardinality(cardinality);
+    }
 
     int numBytesPerRecord = 0;
     for (AggregatorFactory aggregatorFactory : query.getAggregatorSpecs()) {
@@ -103,6 +125,9 @@ public class TopNQueryEngine
 
     final TopNAlgorithmSelector selector = new TopNAlgorithmSelector(cardinality, numBytesPerRecord);
     query.initTopNAlgorithmSelector(selector);
+
+    final ColumnCapabilities columnCapabilities = query.getVirtualColumns()
+                                                       .getColumnCapabilitiesWithFallback(adapter, dimension);
 
     final TopNAlgorithm topNAlgorithm;
     if (
@@ -117,12 +142,19 @@ public class TopNQueryEngine
       topNAlgorithm = new TimeExtractionTopNAlgorithm(capabilities, query);
     } else if (selector.isHasExtractionFn()) {
       topNAlgorithm = new DimExtractionTopNAlgorithm(capabilities, query);
+    } else if (columnCapabilities != null && !(columnCapabilities.getType() == ValueType.STRING
+                                              && columnCapabilities.isDictionaryEncoded())) {
+      // Use DimExtraction for non-Strings and for non-dictionary-encoded Strings.
+      topNAlgorithm = new DimExtractionTopNAlgorithm(capabilities, query);
     } else if (selector.isAggregateAllMetrics()) {
       topNAlgorithm = new PooledTopNAlgorithm(capabilities, query, bufferPool);
     } else if (selector.isAggregateTopNMetricFirst() || query.getContextBoolean("doAggregateTopNMetricFirst", false)) {
       topNAlgorithm = new AggregateTopNMetricFirstAlgorithm(capabilities, query, bufferPool);
     } else {
       topNAlgorithm = new PooledTopNAlgorithm(capabilities, query, bufferPool);
+    }
+    if (queryMetrics != null) {
+      queryMetrics.algorithm(topNAlgorithm);
     }
 
     return new TopNMapFn(query, topNAlgorithm);

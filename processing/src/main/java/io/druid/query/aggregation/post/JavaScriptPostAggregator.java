@@ -24,9 +24,10 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Sets;
-import io.druid.java.util.common.ISE;
 import io.druid.js.JavaScriptConfig;
+import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.PostAggregator;
+import io.druid.query.cache.CacheKeyBuilder;
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.ContextFactory;
 import org.mozilla.javascript.ScriptableObject;
@@ -48,9 +49,9 @@ public class JavaScriptPostAggregator implements PostAggregator
     }
   };
 
-  private static interface Function
+  private interface Function
   {
-    public double apply(final Object[] args);
+    double apply(Object[] args);
   }
 
   private static Function compile(String function)
@@ -67,6 +68,7 @@ public class JavaScriptPostAggregator implements PostAggregator
 
     return new Function()
     {
+      @Override
       public double apply(Object[] args)
       {
         // ideally we need a close() function to discard the context once it is not used anymore
@@ -83,8 +85,10 @@ public class JavaScriptPostAggregator implements PostAggregator
   private final String name;
   private final List<String> fieldNames;
   private final String function;
+  private final JavaScriptConfig config;
 
-  private final Function fn;
+  // This variable is lazily initialized to avoid unnecessary JavaScript compilation during JSON serde
+  private Function fn;
 
   @JsonCreator
   public JavaScriptPostAggregator(
@@ -101,12 +105,7 @@ public class JavaScriptPostAggregator implements PostAggregator
     this.name = name;
     this.fieldNames = fieldNames;
     this.function = function;
-
-    if (config.isDisabled()) {
-      this.fn = null;
-    } else {
-      this.fn = compile(function);
-    }
+    this.config = config;
   }
 
   @Override
@@ -124,10 +123,7 @@ public class JavaScriptPostAggregator implements PostAggregator
   @Override
   public Object compute(Map<String, Object> combinedAggregators)
   {
-    if (fn == null) {
-      throw new ISE("JavaScript is disabled");
-    }
-
+    checkAndCompileScript();
     final Object[] args = new Object[fieldNames.size()];
     int i = 0;
     for (String field : fieldNames) {
@@ -136,11 +132,48 @@ public class JavaScriptPostAggregator implements PostAggregator
     return fn.apply(args);
   }
 
+  /**
+   * {@link #compute} can be called by multiple threads, so this function should be thread-safe to avoid extra
+   * script compilation.
+   */
+  private void checkAndCompileScript()
+  {
+    if (fn == null) {
+      // JavaScript configuration should be checked when it's actually used because someone might still want Druid
+      // nodes to be able to deserialize JavaScript-based objects even though JavaScript is disabled.
+      Preconditions.checkState(config.isEnabled(), "JavaScript is disabled");
+
+      // Synchronizing here can degrade the performance significantly because this method is called per input row.
+      // However, early compilation of JavaScript functions can occur some memory issues due to unnecessary compilation
+      // involving Java class generation each time, and thus this will be better.
+      synchronized (config) {
+        if (fn == null) {
+          fn = compile(function);
+        }
+      }
+    }
+  }
+
+  @Override
+  public byte[] getCacheKey()
+  {
+    return new CacheKeyBuilder(PostAggregatorIds.JAVA_SCRIPT)
+        .appendStrings(fieldNames)
+        .appendString(function)
+        .build();
+  }
+
   @JsonProperty
   @Override
   public String getName()
   {
     return name;
+  }
+
+  @Override
+  public JavaScriptPostAggregator decorate(Map<String, AggregatorFactory> aggregators)
+  {
+    return this;
   }
 
   @JsonProperty
@@ -167,16 +200,13 @@ public class JavaScriptPostAggregator implements PostAggregator
 
     JavaScriptPostAggregator that = (JavaScriptPostAggregator) o;
 
-    if (fieldNames != null ? !fieldNames.equals(that.fieldNames) : that.fieldNames != null) {
+    if (!fieldNames.equals(that.fieldNames)) {
       return false;
     }
-    if (fn != null ? !fn.equals(that.fn) : that.fn != null) {
+    if (!function.equals(that.function)) {
       return false;
     }
-    if (function != null ? !function.equals(that.function) : that.function != null) {
-      return false;
-    }
-    if (name != null ? !name.equals(that.name) : that.name != null) {
+    if (!name.equals(that.name)) {
       return false;
     }
 
@@ -186,10 +216,9 @@ public class JavaScriptPostAggregator implements PostAggregator
   @Override
   public int hashCode()
   {
-    int result = name != null ? name.hashCode() : 0;
-    result = 31 * result + (fieldNames != null ? fieldNames.hashCode() : 0);
-    result = 31 * result + (function != null ? function.hashCode() : 0);
-    result = 31 * result + (fn != null ? fn.hashCode() : 0);
+    int result = name.hashCode();
+    result = 31 * result + fieldNames.hashCode();
+    result = 31 * result + function.hashCode();
     return result;
   }
 }

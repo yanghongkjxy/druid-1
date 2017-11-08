@@ -10,9 +10,9 @@ This page discusses how to use JavaScript to extend Druid.
 JavaScript can be used to extend Druid in a variety of ways:
 
 - [Aggregators](../querying/aggregations.html#javascript-aggregator)
-- [Extraction functions](../querying/aggregations.html#javascript-extraction-function)
-- [Filters](../querying/aggregations.html#javascript-filter)
-- [Post-aggregators](../querying/aggregations.html#javascript-post-aggregator)
+- [Extraction functions](../querying/dimensionspecs.html#javascript-extraction-function)
+- [Filters](../querying/filters.html#javascript-filter)
+- [Post-aggregators](../querying/post-aggregations.html#javascript-post-aggregator)
 - [Input parsers](../ingestion/data-formats.html#javascript)
 - [Router strategy](../development/router.html#javascript)
 - [Worker select strategy](../configuration/indexing-service.html#javascript)
@@ -21,6 +21,14 @@ JavaScript can be injected dynamically at runtime, making it convenient to rapid
 without needing to write and deploy Druid extensions.
 
 Druid uses the Mozilla Rhino engine at optimization level 9 to compile and execute JavaScript.
+
+## Security
+
+Druid does not execute JavaScript functions in a sandbox, so they have full access to the machine. So Javascript
+functions allow users to execute arbitrary code inside druid process. So, by default, Javascript is disabled.
+However, on dev/staging environments or secured production environments you can enable those by setting
+the [configuration property](../configuration/index.html)
+`druid.javascript.enabled = true`.
 
 ## Global variables
 
@@ -35,13 +43,6 @@ functions can have steeper performance penalties. Druid compiles JavaScript func
 You may need to pay special attention to garbage collection when making heavy use of JavaScript functions, especially
 garbage collection of the compiled classes themselves. Be sure to use a garbage collector configuration that supports
 timely collection of unused classes (this is generally easier on JDK8 with the Metaspace than it is on JDK7).
-
-## Security
-
-Druid does not execute JavaScript functions in a sandbox, so they have full access to the machine. If you are running
-a cluster where users that can submit queries should not be allowed to execute arbitrary code, we recommend disabling
-JavaScript functionality by setting the [configuration property](../configuration/index.html)
-`druid.javascript.disabled = true`.
 
 ## JavaScript vs. Native Extensions
 

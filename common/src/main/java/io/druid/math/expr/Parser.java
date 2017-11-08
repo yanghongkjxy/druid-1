@@ -20,12 +20,13 @@
 package io.druid.math.expr;
 
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
-import com.google.common.collect.Lists;
-
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.math.expr.antlr.ExprLexer;
 import io.druid.math.expr.antlr.ExprParser;
@@ -41,26 +42,37 @@ import java.util.Set;
 
 public class Parser
 {
-  static final Logger log = new Logger(Parser.class);
-  static final Map<String, Function> func;
+  private static final Logger log = new Logger(Parser.class);
+  private static final Map<String, Function> FUNCTIONS;
 
   static {
     Map<String, Function> functionMap = Maps.newHashMap();
     for (Class clazz : Function.class.getClasses()) {
       if (!Modifier.isAbstract(clazz.getModifiers()) && Function.class.isAssignableFrom(clazz)) {
         try {
-          Function function = (Function)clazz.newInstance();
-          functionMap.put(function.name().toLowerCase(), function);
+          Function function = (Function) clazz.newInstance();
+          functionMap.put(StringUtils.toLowerCase(function.name()), function);
         }
         catch (Exception e) {
           log.info("failed to instantiate " + clazz.getName() + ".. ignoring", e);
         }
       }
     }
-    func = ImmutableMap.copyOf(functionMap);
+    FUNCTIONS = ImmutableMap.copyOf(functionMap);
   }
 
-  public static Expr parse(String in)
+  public static Function getFunction(String name)
+  {
+    return FUNCTIONS.get(StringUtils.toLowerCase(name));
+  }
+
+  public static Expr parse(String in, ExprMacroTable macroTable)
+  {
+    return parse(in, macroTable, true);
+  }
+
+  @VisibleForTesting
+  static Expr parse(String in, ExprMacroTable macroTable, boolean withFlatten)
   {
     ExprLexer lexer = new ExprLexer(new ANTLRInputStream(in));
     CommonTokenStream tokens = new CommonTokenStream(lexer);
@@ -68,14 +80,53 @@ public class Parser
     parser.setBuildParseTree(true);
     ParseTree parseTree = parser.expr();
     ParseTreeWalker walker = new ParseTreeWalker();
-    ExprListenerImpl listener = new ExprListenerImpl(parseTree);
+    ExprListenerImpl listener = new ExprListenerImpl(parseTree, macroTable);
     walker.walk(listener, parseTree);
-    return listener.getAST();
+    return withFlatten ? flatten(listener.getAST()) : listener.getAST();
   }
 
-  public static List<String> findRequiredBindings(String in)
+  public static Expr flatten(Expr expr)
   {
-    return findRequiredBindings(parse(in));
+    if (expr instanceof BinaryOpExprBase) {
+      BinaryOpExprBase binary = (BinaryOpExprBase) expr;
+      Expr left = flatten(binary.left);
+      Expr right = flatten(binary.right);
+      if (Evals.isAllConstants(left, right)) {
+        expr = expr.eval(null).toExpr();
+      } else if (left != binary.left || right != binary.right) {
+        return Evals.binaryOp(binary, left, right);
+      }
+    } else if (expr instanceof UnaryExpr) {
+      UnaryExpr unary = (UnaryExpr) expr;
+      Expr eval = flatten(unary.expr);
+      if (eval instanceof ConstantExpr) {
+        expr = expr.eval(null).toExpr();
+      } else if (eval != unary.expr) {
+        if (expr instanceof UnaryMinusExpr) {
+          expr = new UnaryMinusExpr(eval);
+        } else if (expr instanceof UnaryNotExpr) {
+          expr = new UnaryNotExpr(eval);
+        } else {
+          expr = unary; // unknown type..
+        }
+      }
+    } else if (expr instanceof FunctionExpr) {
+      FunctionExpr functionExpr = (FunctionExpr) expr;
+      List<Expr> args = functionExpr.args;
+      boolean flattened = false;
+      List<Expr> flattening = Lists.newArrayListWithCapacity(args.size());
+      for (Expr arg : args) {
+        Expr flatten = flatten(arg);
+        flattened |= flatten != arg;
+        flattening.add(flatten);
+      }
+      if (Evals.isAllConstants(flattening)) {
+        expr = expr.eval(null).toExpr();
+      } else if (flattened) {
+        expr = new FunctionExpr(functionExpr.function, functionExpr.name, flattening);
+      }
+    }
+    return expr;
   }
 
   public static List<String> findRequiredBindings(Expr expr)
@@ -98,30 +149,14 @@ public class Parser
 
   public static Expr.ObjectBinding withMap(final Map<String, ?> bindings)
   {
-    return new Expr.ObjectBinding()
-    {
-      @Override
-      public Number get(String name)
-      {
-        Number number = (Number)bindings.get(name);
-        if (number == null && !bindings.containsKey(name)) {
-          throw new RuntimeException("No binding found for " + name);
-        }
-        return number;
-      }
-    };
+    return bindings::get;
   }
 
-  public static Expr.ObjectBinding withSuppliers(final Map<String, Supplier<Number>> bindings)
+  public static Expr.ObjectBinding withSuppliers(final Map<String, Supplier<Object>> bindings)
   {
-    return new Expr.ObjectBinding()
-    {
-      @Override
-      public Number get(String name)
-      {
-        Supplier<Number> supplier = bindings.get(name);
-        return supplier == null ? null : supplier.get();
-      }
+    return (String name) -> {
+      Supplier<Object> supplier = bindings.get(name);
+      return supplier == null ? null : supplier.get();
     };
   }
 }

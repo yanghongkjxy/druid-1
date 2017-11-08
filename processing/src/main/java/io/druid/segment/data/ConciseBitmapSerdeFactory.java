@@ -19,14 +19,15 @@
 
 package io.druid.segment.data;
 
-import com.google.common.collect.Ordering;
-import com.metamx.collections.bitmap.BitmapFactory;
-import com.metamx.collections.bitmap.ConciseBitmapFactory;
-import com.metamx.collections.bitmap.ImmutableBitmap;
-import com.metamx.collections.bitmap.WrappedImmutableConciseBitmap;
-import it.uniroma3.mat.extendedset.intset.ImmutableConciseSet;
-
 import java.nio.ByteBuffer;
+
+import com.google.common.collect.Ordering;
+
+import io.druid.collections.bitmap.BitmapFactory;
+import io.druid.collections.bitmap.ConciseBitmapFactory;
+import io.druid.collections.bitmap.ImmutableBitmap;
+import io.druid.collections.bitmap.WrappedImmutableConciseBitmap;
+import io.druid.extendedset.intset.ImmutableConciseSet;
 
 /**
  */
@@ -47,20 +48,20 @@ public class ConciseBitmapSerdeFactory implements BitmapSerdeFactory
     return bitmapFactory;
   }
 
-  private static Ordering<WrappedImmutableConciseBitmap> conciseComparator = new Ordering<WrappedImmutableConciseBitmap>()
+  private static final Ordering<WrappedImmutableConciseBitmap> CONCISE_COMPARATOR = new Ordering<WrappedImmutableConciseBitmap>()
   {
     @Override
     public int compare(
         WrappedImmutableConciseBitmap conciseSet, WrappedImmutableConciseBitmap conciseSet1
     )
     {
-      if (conciseSet.size() == 0 && conciseSet1.size() == 0) {
+      if (conciseSet.isEmpty() && conciseSet1.isEmpty()) {
         return 0;
       }
-      if (conciseSet.size() == 0) {
+      if (conciseSet.isEmpty()) {
         return -1;
       }
-      if (conciseSet1.size() == 0) {
+      if (conciseSet1.isEmpty()) {
         return 1;
       }
       return conciseSet.compareTo(conciseSet1);
@@ -79,15 +80,14 @@ public class ConciseBitmapSerdeFactory implements BitmapSerdeFactory
     @Override
     public WrappedImmutableConciseBitmap fromByteBuffer(ByteBuffer buffer, int numBytes)
     {
-      final ByteBuffer readOnlyBuffer = buffer.asReadOnlyBuffer();
-      readOnlyBuffer.limit(readOnlyBuffer.position() + numBytes);
-      return new WrappedImmutableConciseBitmap(new ImmutableConciseSet(readOnlyBuffer));
+      buffer.limit(buffer.position() + numBytes);
+      return new WrappedImmutableConciseBitmap(new ImmutableConciseSet(buffer));
     }
 
     @Override
     public byte[] toBytes(ImmutableBitmap val)
     {
-      if (val == null || val.size() == 0) {
+      if (val == null || val.isEmpty()) {
         return new byte[]{};
       }
       return val.toBytes();
@@ -96,7 +96,7 @@ public class ConciseBitmapSerdeFactory implements BitmapSerdeFactory
     @Override
     public int compare(ImmutableBitmap o1, ImmutableBitmap o2)
     {
-      return conciseComparator.compare((WrappedImmutableConciseBitmap) o1, (WrappedImmutableConciseBitmap) o2);
+      return CONCISE_COMPARATOR.compare((WrappedImmutableConciseBitmap) o1, (WrappedImmutableConciseBitmap) o2);
     }
   }
 

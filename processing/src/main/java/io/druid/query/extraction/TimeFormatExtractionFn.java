@@ -20,40 +20,56 @@
 package io.druid.query.extraction;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import io.druid.granularity.QueryGranularities;
-import io.druid.granularity.QueryGranularity;
+import com.google.common.base.Preconditions;
+import io.druid.common.guava.GuavaUtils;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.StringUtils;
+import io.druid.java.util.common.granularity.Granularities;
+import io.druid.java.util.common.granularity.Granularity;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.joda.time.chrono.ISOChronology;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.ISODateTimeFormat;
 
+import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
 import java.util.Locale;
 
 public class TimeFormatExtractionFn implements ExtractionFn
 {
-  private final DateTimeZone tz;
   private final String format;
+  private final DateTimeZone tz;
   private final Locale locale;
-  private final QueryGranularity granularity;
+  private final Granularity granularity;
+  private final boolean asMillis;
   private final DateTimeFormatter formatter;
 
   public TimeFormatExtractionFn(
       @JsonProperty("format") String format,
       @JsonProperty("timeZone") DateTimeZone tz,
       @JsonProperty("locale") String localeString,
-      @JsonProperty("granularity") QueryGranularity granularity
+      @JsonProperty("granularity") Granularity granularity,
+      @JsonProperty("asMillis") boolean asMillis
   )
   {
     this.format = format;
     this.tz = tz;
     this.locale = localeString == null ? null : Locale.forLanguageTag(localeString);
-    this.granularity = granularity == null ? QueryGranularities.NONE : granularity;
-    this.formatter = (format == null ? ISODateTimeFormat.dateTime() : DateTimeFormat.forPattern(format))
-        .withZone(tz == null ? DateTimeZone.UTC : tz)
-        .withLocale(locale);
+    this.granularity = granularity == null ? Granularities.NONE : granularity;
+
+    if (asMillis && format == null) {
+      Preconditions.checkArgument(tz == null, "timeZone requires a format");
+      Preconditions.checkArgument(localeString == null, "locale requires a format");
+      this.formatter = null;
+    } else {
+      this.formatter = (format == null ? ISODateTimeFormat.dateTime() : DateTimeFormat.forPattern(format))
+          .withZone(tz == null ? DateTimeZone.UTC : tz)
+          .withLocale(locale);
+    }
+
+    this.asMillis = asMillis;
   }
 
   @JsonProperty
@@ -79,38 +95,60 @@ public class TimeFormatExtractionFn implements ExtractionFn
   }
 
   @JsonProperty
-  public QueryGranularity getGranularity()
+  public Granularity getGranularity()
   {
     return granularity;
+  }
+
+  @JsonProperty
+  public boolean isAsMillis()
+  {
+    return asMillis;
   }
 
   @Override
   public byte[] getCacheKey()
   {
-    final byte[] exprBytes = StringUtils.toUtf8(format + "\u0001" + tz.getID() + "\u0001" + locale.toLanguageTag());
-    final byte[] granularityCacheKey = granularity.cacheKey();
-    return ByteBuffer.allocate(2 + exprBytes.length + granularityCacheKey.length)
+    final String tzId = (tz == null ? DateTimeZone.UTC : tz).getID();
+    final String localeTag = (locale == null ? Locale.getDefault() : locale).toLanguageTag();
+    final byte[] exprBytes = StringUtils.toUtf8(format + "\u0001" + tzId + "\u0001" + localeTag);
+    final byte[] granularityCacheKey = granularity.getCacheKey();
+    return ByteBuffer.allocate(4 + exprBytes.length + granularityCacheKey.length)
                      .put(ExtractionCacheHelper.CACHE_TYPE_ID_TIME_FORMAT)
                      .put(exprBytes)
                      .put((byte) 0xFF)
                      .put(granularityCacheKey)
+                     .put((byte) 0xFF)
+                     .put(asMillis ? (byte) 1 : (byte) 0)
                      .array();
   }
 
   @Override
   public String apply(long value)
   {
-    return formatter.print(granularity.truncate(value));
+    final long truncated = granularity.bucketStart(DateTimes.utc(value)).getMillis();
+    return formatter == null ? String.valueOf(truncated) : formatter.print(truncated);
   }
 
   @Override
-  public String apply(Object value)
+  @Nullable
+  public String apply(@Nullable Object value)
   {
-    return apply(new DateTime(value).getMillis());
+    if (value == null) {
+      return null;
+    }
+
+    if (asMillis && value instanceof String) {
+      final Long theLong = GuavaUtils.tryParseLong((String) value);
+      return theLong == null ? apply(DateTimes.of((String) value).getMillis()) : apply(theLong.longValue());
+    } else {
+      return apply(new DateTime(value, ISOChronology.getInstanceUTC()).getMillis());
+    }
   }
 
   @Override
-  public String apply(String value)
+  @Nullable
+  public String apply(@Nullable String value)
   {
     return apply((Object) value);
   }
@@ -139,26 +177,36 @@ public class TimeFormatExtractionFn implements ExtractionFn
 
     TimeFormatExtractionFn that = (TimeFormatExtractionFn) o;
 
-    if (tz != null ? !tz.equals(that.tz) : that.tz != null) {
+    if (asMillis != that.asMillis) {
       return false;
     }
     if (format != null ? !format.equals(that.format) : that.format != null) {
       return false;
     }
+    if (tz != null ? !tz.equals(that.tz) : that.tz != null) {
+      return false;
+    }
     if (locale != null ? !locale.equals(that.locale) : that.locale != null) {
       return false;
     }
-    return granularity.equals(that.granularity);
+    return granularity != null ? granularity.equals(that.granularity) : that.granularity == null;
 
   }
 
   @Override
   public int hashCode()
   {
-    int result = tz != null ? tz.hashCode() : 0;
-    result = 31 * result + (format != null ? format.hashCode() : 0);
+    int result = format != null ? format.hashCode() : 0;
+    result = 31 * result + (tz != null ? tz.hashCode() : 0);
     result = 31 * result + (locale != null ? locale.hashCode() : 0);
-    result = 31 * result + granularity.hashCode();
+    result = 31 * result + (granularity != null ? granularity.hashCode() : 0);
+    result = 31 * result + (asMillis ? 1 : 0);
     return result;
+  }
+
+  @Override
+  public String toString()
+  {
+    return StringUtils.format("timeFormat(\"%s\", %s, %s, %s, %s)", format, tz, locale, granularity, asMillis);
   }
 }

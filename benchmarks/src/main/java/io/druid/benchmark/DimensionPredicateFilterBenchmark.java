@@ -23,12 +23,14 @@ import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.collect.FluentIterable;
-import com.metamx.collections.bitmap.BitmapFactory;
-import com.metamx.collections.bitmap.ImmutableBitmap;
-import com.metamx.collections.bitmap.MutableBitmap;
-import com.metamx.collections.bitmap.RoaringBitmapFactory;
-import com.metamx.collections.spatial.ImmutableRTree;
+import io.druid.collections.bitmap.BitmapFactory;
+import io.druid.collections.bitmap.ImmutableBitmap;
+import io.druid.collections.bitmap.MutableBitmap;
+import io.druid.collections.bitmap.RoaringBitmapFactory;
+import io.druid.collections.spatial.ImmutableRTree;
 import io.druid.query.filter.BitmapIndexSelector;
+import io.druid.query.filter.DruidDoublePredicate;
+import io.druid.query.filter.DruidFloatPredicate;
 import io.druid.query.filter.DruidLongPredicate;
 import io.druid.query.filter.DruidPredicateFactory;
 import io.druid.segment.column.BitmapIndex;
@@ -86,14 +88,19 @@ public class DimensionPredicateFilterBenchmark
         @Override
         public DruidLongPredicate makeLongPredicate()
         {
-          return new DruidLongPredicate()
-          {
-            @Override
-            public boolean applyLong(long input)
-            {
-              return false;
-            }
-          };
+          return DruidLongPredicate.ALWAYS_FALSE;
+        }
+
+        @Override
+        public DruidFloatPredicate makeFloatPredicate()
+        {
+          return DruidFloatPredicate.ALWAYS_FALSE;
+        }
+
+        @Override
+        public DruidDoublePredicate makeDoublePredicate()
+        {
+          return DruidDoublePredicate.ALWAYS_FALSE;
         }
       },
       null
@@ -152,6 +159,12 @@ public class DimensionPredicateFilterBenchmark
       public Indexed<String> getDimensionValues(String dimension)
       {
         return dictionary;
+      }
+
+      @Override
+      public boolean hasMultipleValues(final String dimension)
+      {
+        throw new UnsupportedOperationException();
       }
 
       @Override

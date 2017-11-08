@@ -10,12 +10,21 @@ Druid uses a module system that allows for the addition of extensions at runtime
 
 Druid's extensions leverage Guice in order to add things at runtime.  Basically, Guice is a framework for Dependency Injection, but we use it to hold the expected object graph of the Druid process.  Extensions can make any changes they want/need to the object graph via adding Guice bindings.  While the extensions actually give you the capability to change almost anything however you want, in general, we expect people to want to extend one of the things listed below.  This means that we honor our [versioning strategy](./versioning.html) for changes that affect the interfaces called out on this page, but other interfaces are deemed "internal" and can be changed in an incompatible manner even between patch releases.
 
-1. Add a new deep storage implementation
-1. Add a new Firehose
-1. Add Aggregators
-1. Add Complex metrics
-1. Add new Query types
-1. Add new Jersey resources
+1. Add a new deep storage implementation by extending the `io.druid.segment.loading.DataSegment*` and
+   `io.druid.tasklogs.TaskLog*` classes.
+1. Add a new Firehose by extending `io.druid.data.input.FirehoseFactory`.
+1. Add a new input parser by extending `io.druid.data.input.impl.InputRowParser`.
+1. Add a new string-based input format by extending `io.druid.data.input.impl.ParseSpec`.
+1. Add Aggregators by extending `io.druid.query.aggregation.AggregatorFactory`, `io.druid.query.aggregation.Aggregator`,
+   and `io.druid.query.aggregation.BufferAggregator`.
+1. Add PostAggregators by extending `io.druid.query.aggregation.PostAggregator`.
+1. Add ExtractionFns by extending `io.druid.query.extraction.ExtractionFn`.
+1. Add Complex metrics by extending `io.druid.segment.serde.ComplexMetricsSerde`.
+1. Add new Query types by extending `io.druid.query.QueryRunnerFactory`, `io.druid.query.QueryToolChest`, and
+   `io.druid.query.Query`.
+1. Add new Jersey resources by calling `Jerseys.addResource(binder, clazz)`.
+1. Add new Jetty filters by extending `io.druid.server.initialization.jetty.ServletFilterHolder`.
+1. Add new secret providers by extending `io.druid.metadata.PasswordProvider`.
 1. Bundle your extension with all the other Druid extensions
 
 Extensions are added to the system via an implementation of `io.druid.initialization.DruidModule`.
@@ -49,7 +58,7 @@ If your jar has this file, then when it is added to the classpath or as an exten
 
 ### Adding a new deep storage implementation
 
-Check the `azure-storage`, `cassandra-storage`, `hdfs-storage` and `s3-extensions` modules for examples of how to do this.
+Check the `azure-storage`, `google-storage`, `cassandra-storage`, `hdfs-storage` and `s3-extensions` modules for examples of how to do this.
 
 The basic idea behind the extension is that you need to add bindings for your DataSegmentPusher and DataSegmentPuller objects.  The way to add them is something like (taken from HdfsStorageDruidModule)
 
@@ -85,7 +94,7 @@ In this way, you can validate both push (at realtime node) and pull (at historic
 
 * DataSegmentPusher
 
-Wherever your data storage (cloud storage service, distributed file system, etc.) is, you should be able to see two new files: `descriptor.json` and `index.zip` after your ingestion task ends.
+Wherever your data storage (cloud storage service, distributed file system, etc.) is, you should be able to see two new files: `descriptor.json` (`partitionNum_descriptor.json` for HDFS data storage) and `index.zip` (`partitionNum_index.zip` for HDFS data storage) after your ingestion task ends.
 
 * DataSegmentPuller
 
@@ -118,7 +127,7 @@ To mark a segment as not used, you need to connect to your metadata storage and 
 
 To start a segment killing task, you need to access the old Coordinator console `http://<COODRINATOR_IP>:<COORDINATOR_PORT/old-console/kill.html` then select the appropriate datasource and then input a time range (e.g. `2000/3000`).
 
-After the killing task ends, both `descriptor.json` and `index.zip` files should be deleted from the data storage.
+After the killing task ends, both `descriptor.json` (`partitionNum_descriptor.json` for HDFS data storage)  and `index.zip` (`partitionNum_index.zip` for HDFS data storage) files should be deleted from the data storage.
 
 ### Adding a new Firehose
 
@@ -177,6 +186,23 @@ Adding new Jersey resources to a module requires calling the following code to b
 ```java
 Jerseys.addResource(binder, NewResource.class);
 ```
+
+### Adding a new Password Provider implementation
+
+You will need to implement `io.druid.metadata.PasswordProvider` interface. For every place where Druid uses PasswordProvider, a new instance of the implementation will be created,
+thus make sure all the necessary information required for fetching each password is supplied during object instantiation.
+In your implementation of `io.druid.initialization.DruidModule`, `getJacksonModules` should look something like this -
+
+``` java
+    return ImmutableList.of(
+        new SimpleModule("SomePasswordProviderModule")
+            .registerSubtypes(
+                new NamedType(SomePasswordProvider.class, "some")
+            )
+    );
+```
+
+where `SomePasswordProvider` is the implementation of `PasswordProvider` interface, you can have a look at `io.druid.metadata.EnvironmentVariablePasswordProvider` for example.
 
 ### Bundle your extension with all the other Druid extensions
 

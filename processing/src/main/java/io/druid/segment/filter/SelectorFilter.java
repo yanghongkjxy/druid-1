@@ -19,11 +19,13 @@
 
 package io.druid.segment.filter;
 
-import com.metamx.collections.bitmap.ImmutableBitmap;
+import io.druid.java.util.common.StringUtils;
+import io.druid.query.BitmapResultFactory;
 import io.druid.query.filter.BitmapIndexSelector;
 import io.druid.query.filter.Filter;
 import io.druid.query.filter.ValueMatcher;
-import io.druid.query.filter.ValueMatcherFactory;
+import io.druid.segment.ColumnSelector;
+import io.druid.segment.ColumnSelectorFactory;
 
 /**
  */
@@ -42,15 +44,15 @@ public class SelectorFilter implements Filter
   }
 
   @Override
-  public ImmutableBitmap getBitmapIndex(BitmapIndexSelector selector)
+  public <T> T getBitmapResult(BitmapIndexSelector selector, BitmapResultFactory<T> bitmapResultFactory)
   {
-    return selector.getBitmapIndex(dimension, value);
+    return bitmapResultFactory.wrapDimensionValue(selector.getBitmapIndex(dimension, value));
   }
 
   @Override
-  public ValueMatcher makeMatcher(ValueMatcherFactory factory)
+  public ValueMatcher makeMatcher(ColumnSelectorFactory factory)
   {
-    return factory.makeValueMatcher(dimension, value);
+    return Filters.makeValueMatcher(factory, dimension, value);
   }
 
   @Override
@@ -60,8 +62,22 @@ public class SelectorFilter implements Filter
   }
 
   @Override
+  public boolean supportsSelectivityEstimation(
+      ColumnSelector columnSelector, BitmapIndexSelector indexSelector
+  )
+  {
+    return Filters.supportsSelectivityEstimation(this, dimension, columnSelector, indexSelector);
+  }
+
+  @Override
+  public double estimateSelectivity(BitmapIndexSelector indexSelector)
+  {
+    return (double) indexSelector.getBitmapIndex(dimension, value).size() / indexSelector.getNumRows();
+  }
+
+  @Override
   public String toString()
   {
-    return String.format("%s = %s", dimension, value);
+    return StringUtils.format("%s = %s", dimension, value);
   }
 }

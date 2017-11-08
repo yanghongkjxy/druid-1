@@ -22,6 +22,7 @@ package io.druid.server.coordinator.helper;
 import com.google.common.collect.Lists;
 import com.metamx.common.guava.Comparators;
 import com.metamx.emitter.EmittingLogger;
+import io.druid.java.util.common.DateTimes;
 import io.druid.metadata.MetadataRuleManager;
 import io.druid.server.coordinator.CoordinatorStats;
 import io.druid.server.coordinator.DruidCluster;
@@ -118,7 +119,6 @@ public class DruidCoordinatorRuleRunner implements DruidCoordinatorHelper
 
     for (String tier : cluster.getTierNames()) {
       replicatorThrottler.updateReplicationState(tier);
-      replicatorThrottler.updateTerminationState(tier);
     }
 
     DruidCoordinatorRuntimeParams paramsWithReplicationManager = params.buildFromExistingWithoutAvailableSegments()
@@ -127,7 +127,7 @@ public class DruidCoordinatorRuleRunner implements DruidCoordinatorHelper
                                                                        .build();
 
     // Run through all matched rules for available segments
-    DateTime now = new DateTime();
+    DateTime now = DateTimes.nowUtc();
     MetadataRuleManager databaseRuleManager = paramsWithReplicationManager.getDatabaseRuleManager();
 
     final List<String> segmentsWithMissingRules = Lists.newArrayListWithCapacity(MAX_MISSING_RULES);

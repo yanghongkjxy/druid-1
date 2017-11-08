@@ -1,27 +1,27 @@
 /*
- *  Licensed to Metamarkets Group Inc. (Metamarkets) under one
- *  or more contributor license agreements. See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership. Metamarkets licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License. You may obtain a copy of the License at
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied. See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
 package io.druid.emitter.graphite;
 
 import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.base.Function;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.inject.Binder;
 import com.google.inject.Injector;
@@ -55,18 +55,25 @@ public class GraphiteEmitterModule implements DruidModule
   @Provides
   @ManageLifecycle
   @Named(EMITTER_TYPE)
-  public Emitter getEmitter(GraphiteEmitterConfig graphiteEmitterConfig, ObjectMapper mapper, final Injector injector){
-    List<Emitter> emitters = Lists.transform(
-        graphiteEmitterConfig.getAlertEmitters(),
-        new Function<String, Emitter>()
-        {
-          @Override
-          public Emitter apply(String s)
-          {
-            return injector.getInstance(Key.get(Emitter.class, Names.named(s)));
-          }
-        }
+  public Emitter getEmitter(GraphiteEmitterConfig graphiteEmitterConfig, ObjectMapper mapper, final Injector injector)
+  {
+    List<Emitter> emitters = ImmutableList.copyOf(
+        Lists.transform(
+            graphiteEmitterConfig.getAlertEmitters(),
+            alertEmitterName -> {
+              return injector.getInstance(Key.get(Emitter.class, Names.named(alertEmitterName)));
+            }
+        )
     );
-    return new GraphiteEmitter(graphiteEmitterConfig, emitters);
+
+    List<Emitter> requestLogEmitters = ImmutableList.copyOf(
+        Lists.transform(
+            graphiteEmitterConfig.getRequestLogEmitters(),
+            requestLogEmitterName -> {
+              return injector.getInstance(Key.get(Emitter.class, Names.named(requestLogEmitterName)));
+            }
+        )
+    );
+    return new GraphiteEmitter(graphiteEmitterConfig, emitters, requestLogEmitters);
   }
 }

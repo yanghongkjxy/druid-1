@@ -1,20 +1,20 @@
 /*
- *  Licensed to Metamarkets Group Inc. (Metamarkets) under one
- *  or more contributor license agreements. See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership. Metamarkets licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License. You may obtain a copy of the License at
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied. See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
 package io.druid.emitter.graphite;
@@ -31,16 +31,15 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
-import com.google.common.io.CharStreams;
 import com.google.common.io.Files;
+import com.google.common.io.Resources;
 import com.metamx.emitter.service.ServiceMetricEvent;
-
 import io.druid.java.util.common.ISE;
 import io.druid.java.util.common.logger.Logger;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.net.URL;
 import java.nio.charset.Charset;
 import java.util.Collections;
 import java.util.List;
@@ -71,6 +70,9 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
   private final String namespacePrefix;
 
   @JsonProperty
+  private final boolean replaceSlashWithDot;
+
+  @JsonProperty
   private final String mapPath;
 
   private final ObjectMapper mapper;
@@ -80,6 +82,7 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
       @JsonProperty("namespacePrefix") String namespacePrefix,
       @JsonProperty("ignoreHostname") Boolean ignoreHostname,
       @JsonProperty("ignoreServiceName") Boolean ignoreServiceName,
+      @JsonProperty("replaceSlashWithDot") Boolean replaceSlashWithDot,
       @JsonProperty("mapPath") String mapPath,
       @JacksonInject ObjectMapper mapper
   )
@@ -89,6 +92,7 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
     this.whiteListDimsMapper = readMap(this.mapPath);
     this.ignoreHostname = ignoreHostname == null ? false : ignoreHostname;
     this.ignoreServiceName = ignoreServiceName == null ? false : ignoreServiceName;
+    this.replaceSlashWithDot = replaceSlashWithDot == null ? false : replaceSlashWithDot;
     this.namespacePrefix = Preconditions.checkNotNull(namespacePrefix, "namespace prefix can not be null");
   }
 
@@ -108,6 +112,12 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
   public String getNamespacePrefix()
   {
     return namespacePrefix;
+  }
+
+  @JsonProperty
+  public boolean replaceSlashWithDot()
+  {
+    return replaceSlashWithDot;
   }
 
   public ImmutableSortedMap<String, ImmutableSet<String>> getWhiteListDimsMapper()
@@ -201,7 +211,7 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
       metricPathBuilder.add(GraphiteEmitter.sanitize(serviceMetricEvent.getHost()));
     }
     metricPathBuilder.addAll(this.getOrderedDimValues(serviceMetricEvent));
-    metricPathBuilder.add(GraphiteEmitter.sanitize(serviceMetricEvent.getMetric()));
+    metricPathBuilder.add(GraphiteEmitter.sanitize(serviceMetricEvent.getMetric(), this.replaceSlashWithDot()));
 
     final GraphiteEvent graphiteEvent = new GraphiteEvent(
         Joiner.on(".").join(metricPathBuilder.build()),
@@ -229,6 +239,9 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
     if (isIgnoreServiceName() != that.isIgnoreServiceName()) {
       return false;
     }
+    if (replaceSlashWithDot() != that.replaceSlashWithDot()) {
+      return false;
+    }
     if (!getNamespacePrefix().equals(that.getNamespacePrefix())) {
       return false;
     }
@@ -241,6 +254,7 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
   {
     int result = (isIgnoreHostname() ? 1 : 0);
     result = 31 * result + (isIgnoreServiceName() ? 1 : 0);
+    result = 31 * result + (replaceSlashWithDot() ? 1 : 0);
     result = 31 * result + getNamespacePrefix().hashCode();
     result = 31 * result + (mapPath != null ? mapPath.hashCode() : 0);
     return result;
@@ -252,11 +266,10 @@ public class WhiteListBasedConverter implements DruidToGraphiteEventConverter
     String actualPath = mapPath;
     try {
       if (Strings.isNullOrEmpty(mapPath)) {
-        actualPath = this.getClass().getClassLoader().getResource("defaultWhiteListMap.json").getFile();
+        URL resource = this.getClass().getClassLoader().getResource("defaultWhiteListMap.json");
+        actualPath = resource.getFile();
         LOGGER.info("using default whiteList map located at [%s]", actualPath);
-        fileContent = CharStreams.toString(new InputStreamReader(this.getClass()
-                                                                     .getClassLoader()
-                                                                     .getResourceAsStream("defaultWhiteListMap.json")));
+        fileContent = Resources.toString(resource, Charset.defaultCharset());
       } else {
         fileContent = Files.asCharSource(new File(mapPath), Charset.forName("UTF-8")).read();
       }

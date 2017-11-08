@@ -34,6 +34,7 @@ import io.druid.indexer.hadoop.DatasourceInputSplit;
 import io.druid.indexer.hadoop.WindowedDataSegment;
 import io.druid.java.util.common.IAE;
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.timeline.DataSegment;
 import org.apache.commons.io.FileUtils;
@@ -85,7 +86,7 @@ public class HadoopConverterJob
     if (segments.size() == 1) {
       final DataSegment segment = segments.get(0);
       jobConf.setJobName(
-          String.format(
+          StringUtils.format(
               "druid-convert-%s-%s-%s",
               segment.getDataSource(),
               segment.getInterval(),
@@ -120,7 +121,7 @@ public class HadoopConverterJob
           )
       );
       jobConf.setJobName(
-          String.format(
+          StringUtils.format(
               "druid-convert-%s-%s",
               Arrays.toString(dataSources.toArray()),
               Arrays.toString(versions.toArray())
@@ -236,7 +237,7 @@ public class HadoopConverterJob
     }
     converterConfigIntoConfiguration(converterConfig, segments, jobConf);
 
-    jobConf.setNumReduceTasks(0);// Map only. Number of map tasks determined by input format
+    jobConf.setNumReduceTasks(0); // Map only. Number of map tasks determined by input format
     jobConf.setWorkingDirectory(new Path(converterConfig.getDistributedSuccessCache()));
 
     setJobName(jobConf, segments);
@@ -343,7 +344,7 @@ public class HadoopConverterJob
       }
     }
     catch (InterruptedException | ClassNotFoundException e) {
-      RuntimeException exception =  Throwables.propagate(e);
+      RuntimeException exception = Throwables.propagate(e);
       throwable = exception;
       throw exception;
     }
@@ -504,7 +505,7 @@ public class HadoopConverterJob
       final String tmpDirLoc = context.getConfiguration().get(TMP_FILE_LOC_KEY);
       final File tmpDir = Paths.get(tmpDirLoc).toFile();
 
-      final DataSegment segment  = Iterables.getOnlyElement(((DatasourceInputSplit) split).getSegments()).getSegment();
+      final DataSegment segment = Iterables.getOnlyElement(((DatasourceInputSplit) split).getSegments()).getSegment();
 
       final HadoopDruidConverterConfig config = converterConfigFromConfiguration(context.getConfiguration());
 
@@ -528,15 +529,19 @@ public class HadoopConverterJob
       context.setStatus("CONVERTING");
       context.progress();
       final File outDir = new File(tmpDir, "out");
-      if (!outDir.mkdir() && (!outDir.exists() || !outDir.isDirectory())) {
-        throw new IOException(String.format("Could not create output directory [%s]", outDir));
+      FileUtils.forceMkdir(outDir);
+      try {
+        HadoopDruidConverterConfig.INDEX_MERGER.convert(
+            inDir,
+            outDir,
+            config.getIndexSpec(),
+            JobHelper.progressIndicatorForContext(context)
+        );
       }
-      HadoopDruidConverterConfig.INDEX_MERGER.convert(
-          inDir,
-          outDir,
-          config.getIndexSpec(),
-          JobHelper.progressIndicatorForContext(context)
-      );
+      catch (Exception e) {
+        log.error(e, "Conversion failed.");
+        throw e;
+      }
       if (config.isValidate()) {
         context.setStatus("Validating");
         HadoopDruidConverterConfig.INDEX_IO.validateTwoSegments(inDir, outDir);
@@ -553,13 +558,29 @@ public class HadoopConverterJob
           finalSegmentTemplate,
           context.getConfiguration(),
           context,
-          context.getTaskAttemptID(),
           outDir,
-          JobHelper.makeSegmentOutputPath(
+          JobHelper.makeFileNamePath(
               baseOutputPath,
               outputFS,
-              finalSegmentTemplate
-          )
+              finalSegmentTemplate,
+              JobHelper.INDEX_ZIP,
+              config.DATA_SEGMENT_PUSHER
+          ),
+          JobHelper.makeFileNamePath(
+              baseOutputPath,
+              outputFS,
+              finalSegmentTemplate,
+              JobHelper.DESCRIPTOR_JSON,
+              config.DATA_SEGMENT_PUSHER
+          ),
+          JobHelper.makeTmpPath(
+              baseOutputPath,
+              outputFS,
+              finalSegmentTemplate,
+              context.getTaskAttemptID(),
+              config.DATA_SEGMENT_PUSHER
+          ),
+          config.DATA_SEGMENT_PUSHER
       );
       context.progress();
       context.setStatus("Finished PUSH");

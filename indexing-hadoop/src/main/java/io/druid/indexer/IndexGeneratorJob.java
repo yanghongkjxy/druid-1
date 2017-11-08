@@ -34,13 +34,14 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import io.druid.common.guava.ThreadRenamingRunnable;
-import io.druid.concurrent.Execs;
+import io.druid.java.util.common.concurrent.Execs;
 import io.druid.data.input.InputRow;
 import io.druid.data.input.Row;
 import io.druid.data.input.Rows;
 import io.druid.indexer.hadoop.SegmentInputRow;
 import io.druid.java.util.common.IAE;
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.segment.BaseProgressIndicator;
@@ -49,7 +50,6 @@ import io.druid.segment.QueryableIndex;
 import io.druid.segment.column.ColumnCapabilitiesImpl;
 import io.druid.segment.incremental.IncrementalIndex;
 import io.druid.segment.incremental.IncrementalIndexSchema;
-import io.druid.segment.incremental.OnheapIncrementalIndex;
 import io.druid.timeline.DataSegment;
 import io.druid.timeline.partition.NumberedShardSpec;
 import io.druid.timeline.partition.ShardSpec;
@@ -101,6 +101,8 @@ public class IndexGeneratorJob implements Jobby
   public static List<DataSegment> getPublishedSegments(HadoopDruidIndexerConfig config)
   {
     final Configuration conf = JobHelper.injectSystemProperties(new Configuration());
+    config.addJobProperties(conf);
+
     final ObjectMapper jsonMapper = HadoopDruidIndexerConfig.JSON_MAPPER;
 
     ImmutableList.Builder<DataSegment> publishedSegmentsBuilder = ImmutableList.builder();
@@ -153,18 +155,21 @@ public class IndexGeneratorJob implements Jobby
     return jobStats;
   }
 
+  @Override
   public boolean run()
   {
     try {
       Job job = Job.getInstance(
           new Configuration(),
-          String.format("%s-index-generator-%s", config.getDataSource(), config.getIntervals())
+          StringUtils.format("%s-index-generator-%s", config.getDataSource(), config.getIntervals())
       );
 
       job.getConfiguration().set("io.sort.record.percent", "0.23");
 
       JobHelper.injectSystemProperties(job);
       config.addJobProperties(job);
+      // inject druid properties like deep storage bindings
+      JobHelper.injectDruidProperties(job.getConfiguration(), config.getAllowedHadoopPrefix());
 
       job.setMapperClass(IndexGeneratorMapper.class);
       job.setMapOutputValueClass(BytesWritable.class);
@@ -234,11 +239,11 @@ public class IndexGeneratorJob implements Jobby
         .withRollup(config.getSchema().getDataSchema().getGranularitySpec().isRollup())
         .build();
 
-    OnheapIncrementalIndex newIndex = new OnheapIncrementalIndex(
-        indexSchema,
-        !tuningConfig.isIgnoreInvalidRows(),
-        tuningConfig.getRowFlushBoundary()
-    );
+    IncrementalIndex newIndex = new IncrementalIndex.Builder()
+        .setIndexSchema(indexSchema)
+        .setReportParseExceptions(!tuningConfig.isIgnoreInvalidRows())
+        .setMaxRowCount(tuningConfig.getRowFlushBoundary())
+        .buildOnheap();
 
     if (oldDimOrder != null && !indexSchema.getDimensionsSpec().hasCustomDimensions()) {
       newIndex.loadDimensionIterable(oldDimOrder, oldCapabilities);
@@ -281,7 +286,7 @@ public class IndexGeneratorJob implements Jobby
         throw new ISE("WTF?! No bucket found for row: %s", inputRow);
       }
 
-      final long truncatedTimestamp = granularitySpec.getQueryGranularity().truncate(inputRow.getTimestampFromEpoch());
+      final long truncatedTimestamp = granularitySpec.getQueryGranularity().bucketStart(inputRow.getTimestamp()).getMillis();
       final byte[] hashedDimensions = hashFunction.hashBytes(
           HadoopDruidIndexerConfig.JSON_MAPPER.writeValueAsBytes(
               Rows.toGroupKey(
@@ -421,15 +426,9 @@ public class IndexGeneratorJob implements Jobby
         }
 
         @Override
-        public float getFloatMetric(String metric)
+        public Number getMetric(String metric)
         {
-          return row.getFloatMetric(metric);
-        }
-
-        @Override
-        public long getLongMetric(String metric)
-        {
-          return row.getLongMetric(metric);
+          return row.getMetric(metric);
         }
 
         @Override
@@ -451,7 +450,7 @@ public class IndexGeneratorJob implements Jobby
       final ByteBuffer bytes = ByteBuffer.wrap(bytesWritable.getBytes());
       bytes.position(4); // Skip length added by SortableBytes
       int shardNum = bytes.getInt();
-      if (config.get("mapred.job.tracker").equals("local")) {
+      if ("local".equals(config.get("mapreduce.jobtracker.address")) || "local".equals(config.get("mapred.job.tracker"))) {
         return shardNum % numPartitions;
       } else {
         if (shardNum >= numPartitions) {
@@ -502,15 +501,9 @@ public class IndexGeneratorJob implements Jobby
         final ProgressIndicator progressIndicator
     ) throws IOException
     {
-      if (config.isBuildV9Directly()) {
-        return HadoopDruidIndexerConfig.INDEX_MERGER_V9.persist(
-            index, interval, file, config.getIndexSpec(), progressIndicator
-        );
-      } else {
-        return HadoopDruidIndexerConfig.INDEX_MERGER.persist(
-            index, interval, file, config.getIndexSpec(), progressIndicator
-        );
-      }
+      return HadoopDruidIndexerConfig.INDEX_MERGER_V9.persist(
+          index, interval, file, config.getIndexSpec(), progressIndicator
+      );
     }
 
     protected File mergeQueryableIndex(
@@ -521,15 +514,9 @@ public class IndexGeneratorJob implements Jobby
     ) throws IOException
     {
       boolean rollup = config.getSchema().getDataSchema().getGranularitySpec().isRollup();
-      if (config.isBuildV9Directly()) {
-        return HadoopDruidIndexerConfig.INDEX_MERGER_V9.mergeQueryableIndex(
-            indexes, rollup, aggs, file, config.getIndexSpec(), progressIndicator
-        );
-      } else {
-        return HadoopDruidIndexerConfig.INDEX_MERGER.mergeQueryableIndex(
-            indexes, rollup, aggs, file, config.getIndexSpec(), progressIndicator
-        );
-      }
+      return HadoopDruidIndexerConfig.INDEX_MERGER_V9.mergeQueryableIndex(
+          indexes, rollup, aggs, file, config.getIndexSpec(), progressIndicator
+      );
     }
 
     @Override
@@ -628,14 +615,14 @@ public class IndexGeneratorJob implements Jobby
             );
             runningTotalLineCount = lineCount;
 
-            final File file = new File(baseFlushFile, String.format("index%,05d", indexCount));
+            final File file = new File(baseFlushFile, StringUtils.format("index%,05d", indexCount));
             toMerge.add(file);
 
             context.progress();
             final IncrementalIndex persistIndex = index;
             persistFutures.add(
                 persistExecutor.submit(
-                    new ThreadRenamingRunnable(String.format("%s-persist", file.getName()))
+                    new ThreadRenamingRunnable(StringUtils.format("%s-persist", file.getName()))
                     {
                       @Override
                       public void doRun()
@@ -695,8 +682,15 @@ public class IndexGeneratorJob implements Jobby
           for (File file : toMerge) {
             indexes.add(HadoopDruidIndexerConfig.INDEX_IO.loadIndex(file));
           }
+
+          log.info("starting merge of intermediate persisted segments.");
+          long mergeStartTime = System.currentTimeMillis();
           mergedBase = mergeQueryableIndex(
               indexes, aggregators, new File(baseFlushFile, "merged"), progressIndicator
+          );
+          log.info(
+              "finished merge of intermediate persisted segments. time taken [%d] ms.",
+              (System.currentTimeMillis() - mergeStartTime)
           );
         }
         final FileSystem outputFS = new Path(config.getSchema().getIOConfig().getSegmentOutputPath())
@@ -708,7 +702,7 @@ public class IndexGeneratorJob implements Jobby
         // ShardSpec to be published.
         final ShardSpec shardSpecForPublishing;
         if (config.isForceExtendableShardSpecs()) {
-          shardSpecForPublishing = new NumberedShardSpec(shardSpecForPartitioning.getPartitionNum(),config.getShardSpecCount(bucket));
+          shardSpecForPublishing = new NumberedShardSpec(shardSpecForPartitioning.getPartitionNum(), config.getShardSpecCount(bucket));
         } else {
           shardSpecForPublishing = shardSpecForPartitioning;
         }
@@ -728,13 +722,29 @@ public class IndexGeneratorJob implements Jobby
             segmentTemplate,
             context.getConfiguration(),
             context,
-            context.getTaskAttemptID(),
             mergedBase,
-            JobHelper.makeSegmentOutputPath(
+            JobHelper.makeFileNamePath(
                 new Path(config.getSchema().getIOConfig().getSegmentOutputPath()),
                 outputFS,
-                segmentTemplate
-            )
+                segmentTemplate,
+                JobHelper.INDEX_ZIP,
+                config.DATA_SEGMENT_PUSHER
+            ),
+            JobHelper.makeFileNamePath(
+                new Path(config.getSchema().getIOConfig().getSegmentOutputPath()),
+                outputFS,
+                segmentTemplate,
+                JobHelper.DESCRIPTOR_JSON,
+                config.DATA_SEGMENT_PUSHER
+            ),
+            JobHelper.makeTmpPath(
+                new Path(config.getSchema().getIOConfig().getSegmentOutputPath()),
+                outputFS,
+                segmentTemplate,
+                context.getTaskAttemptID(),
+                config.DATA_SEGMENT_PUSHER
+            ),
+            config.DATA_SEGMENT_PUSHER
         );
 
         Path descriptorPath = config.makeDescriptorInfoPath(segment);
@@ -756,10 +766,7 @@ public class IndexGeneratorJob implements Jobby
           FileUtils.deleteDirectory(file);
         }
       }
-      catch (ExecutionException e) {
-        throw Throwables.propagate(e);
-      }
-      catch (TimeoutException e) {
+      catch (ExecutionException | TimeoutException e) {
         throw Throwables.propagate(e);
       }
       finally {

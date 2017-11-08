@@ -54,7 +54,7 @@ public interface IndexerMetadataStorageCoordinator
    *
    * @throws IOException
    */
-  List<DataSegment> getUsedSegmentsForIntervals(final String dataSource, final List<Interval> intervals)
+  List<DataSegment> getUsedSegmentsForIntervals(String dataSource, List<Interval> intervals)
       throws IOException;
 
   /**
@@ -127,6 +127,15 @@ public interface IndexerMetadataStorageCoordinator
    * @return true if the entry was deleted, false otherwise
    */
   boolean deleteDataSourceMetadata(String dataSource);
+
+  /**
+   * Resets dataSourceMetadata entry for 'dataSource' to the one supplied.
+   *
+   * @param dataSource  identifier
+   * @param dataSourceMetadata value to set
+   * @return true if the entry was reset, false otherwise
+   */
+  boolean resetDataSourceMetadata(String dataSource, DataSourceMetadata dataSourceMetadata) throws IOException;
 
   void updateSegmentMetadata(Set<DataSegment> segments) throws IOException;
 

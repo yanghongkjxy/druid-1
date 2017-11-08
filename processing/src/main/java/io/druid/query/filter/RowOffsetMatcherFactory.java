@@ -19,11 +19,11 @@
 
 package io.druid.query.filter;
 
-import com.metamx.collections.bitmap.ImmutableBitmap;
+import io.druid.collections.bitmap.ImmutableBitmap;
 
 /**
  */
 public interface RowOffsetMatcherFactory
 {
-  public ValueMatcher makeRowOffsetMatcher(ImmutableBitmap bitmap);
+  ValueMatcher makeRowOffsetMatcher(ImmutableBitmap bitmap);
 }

@@ -1,18 +1,18 @@
 /*
  * Licensed to Metamarkets Group Inc. (Metamarkets) under one
- * or more contributor license agreements.  See the NOTICE file
+ * or more contributor license agreements. See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership.  Metamarkets licenses this file
+ * regarding copyright ownership. Metamarkets licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * with the License. You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
+ * KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations
  * under the License.
  */
@@ -26,8 +26,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
-
 import io.druid.common.utils.ServletResourceUtils;
+import io.druid.java.util.common.jackson.JacksonUtils;
 import io.druid.java.util.common.logger.Logger;
 
 import javax.annotation.Nullable;
@@ -83,9 +83,7 @@ public abstract class AbstractListenerHandler<ObjType> implements ListenerHandle
     try {
       // This actually fails to properly convert due to type erasure. We'll try again in a second
       // This effectively just parses
-      final Map<String, Object> tempMap = mapper.readValue(inputStream, new TypeReference<Map<String, Object>>()
-      {
-      });
+      final Map<String, Object> tempMap = mapper.readValue(inputStream, JacksonUtils.TYPE_REFERENCE_MAP_STRING_OBJECT);
       // Now do the ACTUAL conversion
       inObjMap = ImmutableMap.copyOf(Maps.transformValues(
           tempMap,
@@ -118,6 +116,8 @@ public abstract class AbstractListenerHandler<ObjType> implements ListenerHandle
     }
   }
 
+
+
   @Override
   public final Response handleGET(String id)
   {
@@ -138,7 +138,7 @@ public abstract class AbstractListenerHandler<ObjType> implements ListenerHandle
   @Override
   public final Response handleGETAll()
   {
-    final Map<String, ObjType> all;
+    final Object all;
     try {
       all = getAll();
       if (all == null) {
@@ -183,9 +183,8 @@ public abstract class AbstractListenerHandler<ObjType> implements ListenerHandle
    *
    * @return The object to be returned in the entity. A NULL return will cause a 404 response. A non-null return will cause a 202 response. An Exception thrown will cause a 500 response.
    */
-  protected abstract
   @Nullable
-  Object delete(String id);
+  protected abstract Object delete(String id);
 
   /**
    * Get the object for a particular id
@@ -194,13 +193,11 @@ public abstract class AbstractListenerHandler<ObjType> implements ListenerHandle
    *
    * @return The object to be returned in the entity. A NULL return will cause a 404 response. A non-null return will cause a 200 response. An Exception thrown will cause a 500 response.
    */
-  protected abstract
   @Nullable
-  Object get(String id);
+  protected abstract Object get(String id);
 
-  protected abstract
   @Nullable
-  Map<String, ObjType> getAll();
+  protected abstract Object getAll();
 
   /**
    * Process a POST request of the input items
@@ -211,7 +208,6 @@ public abstract class AbstractListenerHandler<ObjType> implements ListenerHandle
    *
    * @throws Exception
    */
-  public abstract
   @Nullable
-  Object post(Map<String, ObjType> inputObject) throws Exception;
+  public abstract Object post(Map<String, ObjType> inputObject) throws Exception;
 }

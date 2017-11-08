@@ -24,11 +24,10 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Sets;
-
-import io.druid.data.input.ByteBufferInputRowParser;
 import io.druid.data.input.Firehose;
 import io.druid.data.input.FirehoseFactory;
 import io.druid.data.input.InputRow;
+import io.druid.data.input.impl.InputRowParser;
 import io.druid.java.util.common.logger.Logger;
 import kafka.consumer.Consumer;
 import kafka.consumer.ConsumerConfig;
@@ -37,6 +36,8 @@ import kafka.consumer.KafkaStream;
 import kafka.javaapi.consumer.ConsumerConnector;
 import kafka.message.InvalidMessageException;
 
+import javax.annotation.Nullable;
+import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -46,7 +47,7 @@ import java.util.Set;
 
 /**
  */
-public class KafkaEightFirehoseFactory implements FirehoseFactory<ByteBufferInputRowParser>
+public class KafkaEightFirehoseFactory implements FirehoseFactory<InputRowParser<ByteBuffer>>
 {
   private static final Logger log = new Logger(KafkaEightFirehoseFactory.class);
 
@@ -68,13 +69,14 @@ public class KafkaEightFirehoseFactory implements FirehoseFactory<ByteBufferInpu
   }
 
   @Override
-  public Firehose connect(final ByteBufferInputRowParser firehoseParser) throws IOException
+  public Firehose connect(final InputRowParser<ByteBuffer> firehoseParser, File temporaryDirectory) throws IOException
   {
     Set<String> newDimExclus = Sets.union(
         firehoseParser.getParseSpec().getDimensionsSpec().getDimensionExclusions(),
         Sets.newHashSet("feed")
     );
-    final ByteBufferInputRowParser theParser = firehoseParser.withParseSpec(
+
+    final InputRowParser<ByteBuffer> theParser = firehoseParser.withParseSpec(
         firehoseParser.getParseSpec()
                       .withDimensionsSpec(
                           firehoseParser.getParseSpec()
@@ -110,6 +112,7 @@ public class KafkaEightFirehoseFactory implements FirehoseFactory<ByteBufferInpu
         return iter.hasNext();
       }
 
+      @Nullable
       @Override
       public InputRow nextRow()
       {
@@ -128,7 +131,7 @@ public class KafkaEightFirehoseFactory implements FirehoseFactory<ByteBufferInpu
           IF the CRC is caused within the wire transfer, this is not the best way to handel CRC.
           Probably it is better to shutdown the fireHose without commit and start it again.
            */
-          log.error(e,"Message failed its checksum and it is corrupt, will skip it");
+          log.error(e, "Message failed its checksum and it is corrupt, will skip it");
           return null;
         }
       }

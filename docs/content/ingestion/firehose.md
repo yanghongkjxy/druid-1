@@ -36,6 +36,28 @@ A sample local firehose spec is shown below:
 |filter|A wildcard filter for files. See [here](http://commons.apache.org/proper/commons-io/apidocs/org/apache/commons/io/filefilter/WildcardFileFilter.html) for more information.|yes|
 |baseDir|directory to search recursively for files to be ingested. |yes|
 
+#### HttpFirehose
+
+This Firehose can be used to read the data from remote sites via HTTP.
+A sample http firehose spec is shown below:
+
+```json
+{
+    "type"    : "http",
+    "uris"  : ["http://example.com/uri1", "http://example2.com/uri2"]
+}
+```
+
+The below configurations can be optionally used for tuning the firehose performance.
+
+|property|description|default|
+|--------|-----------|-------|
+|maxCacheCapacityBytes|Maximum size of the cache space in bytes. 0 means disabling cache. Cached files are not removed until the ingestion task completes.|1073741824|
+|maxFetchCapacityBytes|Maximum size of the fetch space in bytes. 0 means disabling prefetch. Prefetched files are removed immediately once they are read.|1073741824|
+|prefetchTriggerBytes|Threshold to trigger prefetching http objects.|maxFetchCapacityBytes / 2|
+|fetchTimeout|Timeout for fetching a http object.|60000|
+|maxFetchRetry|Maximum retry for fetching a http object.|3|
+
 #### IngestSegmentFirehose
 
 This Firehose can be used to read the data from existing druid segments.
@@ -57,7 +79,7 @@ A sample ingest firehose spec is shown below -
 |interval|A String representing ISO-8601 Interval. This defines the time range to fetch the data over.|yes|
 |dimensions|The list of dimensions to select. If left empty, no dimensions are returned. If left null or not defined, all dimensions are returned. |no|
 |metrics|The list of metrics to select. If left empty, no metrics are returned. If left null or not defined, all metrics are selected.|no|
-|filter| See [Filters](../querying/filters.html)|yes|
+|filter| See [Filters](../querying/filters.html)|no|
 
 #### CombiningFirehose
 

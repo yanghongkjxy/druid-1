@@ -21,6 +21,8 @@ package io.druid.segment.serde;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import io.druid.java.util.common.io.smoosh.FileSmoosher;
 import io.druid.segment.FloatColumnSerializer;
 import io.druid.segment.column.ColumnBuilder;
 import io.druid.segment.column.ColumnConfig;
@@ -84,63 +86,21 @@ public class FloatGenericColumnPartSerde implements ColumnPartSerde
     public FloatGenericColumnPartSerde build()
     {
       return new FloatGenericColumnPartSerde(
-          byteOrder, new Serializer()
-      {
-        @Override
-        public long numBytes()
-        {
-          return delegate.getSerializedSize();
-        }
+          byteOrder,
+          new Serializer()
+          {
+            @Override
+            public long numBytes()
+            {
+              return delegate.getSerializedSize();
+            }
 
-        @Override
-        public void write(WritableByteChannel channel) throws IOException
-        {
-          delegate.writeToChannel(channel);
-        }
-      }
-      );
-    }
-  }
-
-  public static LegacySerializerBuilder legacySerializerBuilder()
-  {
-    return new LegacySerializerBuilder();
-  }
-
-  public static class LegacySerializerBuilder
-  {
-    private ByteOrder byteOrder = null;
-    private CompressedFloatsIndexedSupplier delegate = null;
-
-    public LegacySerializerBuilder withByteOrder(final ByteOrder byteOrder)
-    {
-      this.byteOrder = byteOrder;
-      return this;
-    }
-
-    public LegacySerializerBuilder withDelegate(final CompressedFloatsIndexedSupplier delegate)
-    {
-      this.delegate = delegate;
-      return this;
-    }
-
-    public FloatGenericColumnPartSerde build()
-    {
-      return new FloatGenericColumnPartSerde(
-          byteOrder, new Serializer()
-      {
-        @Override
-        public long numBytes()
-        {
-          return delegate.getSerializedSize();
-        }
-
-        @Override
-        public void write(WritableByteChannel channel) throws IOException
-        {
-          delegate.writeToChannel(channel);
-        }
-      }
+            @Override
+            public void write(WritableByteChannel channel, FileSmoosher fileSmoosher) throws IOException
+            {
+              delegate.writeToChannel(channel, fileSmoosher);
+            }
+          }
       );
     }
   }
@@ -161,7 +121,8 @@ public class FloatGenericColumnPartSerde implements ColumnPartSerde
       {
         final CompressedFloatsIndexedSupplier column = CompressedFloatsIndexedSupplier.fromByteBuffer(
             buffer,
-            byteOrder
+            byteOrder,
+            builder.getFileMapper()
         );
         builder.setType(ValueType.FLOAT)
                .setHasMultipleValues(false)

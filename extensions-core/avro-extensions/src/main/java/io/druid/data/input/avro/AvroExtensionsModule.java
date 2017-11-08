@@ -1,18 +1,18 @@
 /*
  * Licensed to Metamarkets Group Inc. (Metamarkets) under one
- * or more contributor license agreements.  See the NOTICE file
+ * or more contributor license agreements. See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership.  Metamarkets licenses this file
+ * regarding copyright ownership. Metamarkets licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * with the License. You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
+ * KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations
  * under the License.
  */
@@ -36,7 +36,7 @@ import org.schemarepo.ValidatorFactory;
 import org.schemarepo.json.GsonJsonUtil;
 import org.schemarepo.json.JsonUtil;
 
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 public class AvroExtensionsModule implements DruidModule
@@ -46,11 +46,12 @@ public class AvroExtensionsModule implements DruidModule
   @Override
   public List<? extends Module> getJacksonModules()
   {
-    return Arrays.asList(
+    return Collections.singletonList(
         new SimpleModule("AvroInputRowParserModule")
             .registerSubtypes(
                 new NamedType(AvroStreamInputRowParser.class, "avro_stream"),
-                new NamedType(AvroHadoopInputRowParser.class, "avro_hadoop")
+                new NamedType(AvroHadoopInputRowParser.class, "avro_hadoop"),
+                new NamedType(AvroParseSpec.class, "avro")
             )
             .setMixInAnnotation(Repository.class, RepositoryMixIn.class)
             .setMixInAnnotation(JsonUtil.class, JsonUtilMixIn.class)

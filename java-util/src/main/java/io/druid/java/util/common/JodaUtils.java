@@ -19,7 +19,6 @@
 
 package io.druid.java.util.common;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -29,19 +28,29 @@ import org.joda.time.Interval;
 
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.TreeSet;
+import java.util.SortedSet;
 
 /**
  */
 public class JodaUtils
 {
+  // limit intervals such that duration millis fits in a long
+  public static final long MAX_INSTANT = Long.MAX_VALUE / 2;
+  public static final long MIN_INSTANT = Long.MIN_VALUE / 2;
+
   public static ArrayList<Interval> condenseIntervals(Iterable<Interval> intervals)
   {
     ArrayList<Interval> retVal = Lists.newArrayList();
 
-    TreeSet<Interval> sortedIntervals = Sets.newTreeSet(Comparators.intervalsByStartThenEnd());
-    for (Interval interval : intervals) {
-      sortedIntervals.add(interval);
+    final SortedSet<Interval> sortedIntervals;
+
+    if (intervals instanceof SortedSet) {
+      sortedIntervals = (SortedSet<Interval>) intervals;
+    } else {
+      sortedIntervals = Sets.newTreeSet(Comparators.intervalsByStartThenEnd());
+      for (Interval interval : intervals) {
+        sortedIntervals.add(interval);
+      }
     }
 
     if (sortedIntervals.isEmpty()) {
@@ -53,8 +62,15 @@ public class JodaUtils
     while (intervalsIter.hasNext()) {
       Interval next = intervalsIter.next();
 
-      if (currInterval.overlaps(next) || currInterval.abuts(next)) {
+      if (currInterval.abuts(next)) {
         currInterval = new Interval(currInterval.getStart(), next.getEnd());
+      } else if (currInterval.overlaps(next)) {
+        DateTime nextEnd = next.getEnd();
+        DateTime currEnd = currInterval.getEnd();
+        currInterval = new Interval(
+            currInterval.getStart(),
+            nextEnd.isAfter(currEnd) ? nextEnd : currEnd
+        );
       } else {
         retVal.add(currInterval);
         currInterval = next;
@@ -86,16 +102,7 @@ public class JodaUtils
 
   public static boolean overlaps(final Interval i, Iterable<Interval> intervals)
   {
-    return Iterables.any(
-        intervals, new Predicate<Interval>()
-    {
-      @Override
-      public boolean apply(Interval input)
-      {
-        return input.overlaps(i);
-      }
-    }
-    );
+    return Iterables.any(intervals, input -> input.overlaps(i));
 
   }
 

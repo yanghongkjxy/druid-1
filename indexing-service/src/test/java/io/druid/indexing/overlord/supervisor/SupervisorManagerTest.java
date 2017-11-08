@@ -21,12 +21,13 @@ package io.druid.indexing.overlord.supervisor;
 
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableMap;
+import io.druid.indexing.overlord.DataSourceMetadata;
+import io.druid.java.util.common.DateTimes;
 import io.druid.metadata.MetadataSupervisorManager;
 import org.easymock.EasyMock;
 import org.easymock.EasyMockRunner;
 import org.easymock.EasyMockSupport;
 import org.easymock.Mock;
-import org.joda.time.DateTime;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -193,7 +194,7 @@ public class SupervisorManagerTest extends EasyMockSupport
   @Test
   public void testGetSupervisorStatus() throws Exception
   {
-    SupervisorReport report = new SupervisorReport("id1", DateTime.now())
+    SupervisorReport report = new SupervisorReport("id1", DateTimes.nowUtc())
     {
       @Override
       public Object getPayload()
@@ -258,17 +259,17 @@ public class SupervisorManagerTest extends EasyMockSupport
 
     EasyMock.expect(metadataSupervisorManager.getLatest()).andReturn(existingSpecs);
     supervisor1.start();
-    supervisor1.reset();
+    supervisor1.reset(EasyMock.anyObject(DataSourceMetadata.class));
     replayAll();
 
     manager.start();
-    Assert.assertTrue("resetValidSupervisor", manager.resetSupervisor("id1"));
-    Assert.assertFalse("resetInvalidSupervisor", manager.resetSupervisor("nobody_home"));
+    Assert.assertTrue("resetValidSupervisor", manager.resetSupervisor("id1", null));
+    Assert.assertFalse("resetInvalidSupervisor", manager.resetSupervisor("nobody_home", null));
 
     verifyAll();
   }
 
-  private class TestSupervisorSpec implements SupervisorSpec
+  private static class TestSupervisorSpec implements SupervisorSpec
   {
     private final String id;
     private final Supervisor supervisor;
@@ -290,5 +291,12 @@ public class SupervisorManagerTest extends EasyMockSupport
     {
       return supervisor;
     }
+
+    @Override
+    public List<String> getDataSources()
+    {
+      return null;
+    }
+
   }
 }

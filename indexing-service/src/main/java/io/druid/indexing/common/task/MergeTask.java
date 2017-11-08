@@ -29,6 +29,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import io.druid.indexing.common.TaskToolbox;
 import io.druid.query.aggregation.AggregatorFactory;
+import io.druid.segment.IndexMerger;
 import io.druid.segment.IndexSpec;
 import io.druid.segment.QueryableIndex;
 import io.druid.timeline.DataSegment;
@@ -55,6 +56,8 @@ public class MergeTask extends MergeTaskBase
       @JsonProperty("aggregations") List<AggregatorFactory> aggregators,
       @JsonProperty("rollup") Boolean rollup,
       @JsonProperty("indexSpec") IndexSpec indexSpec,
+      // This parameter is left for compatibility when reading existing JSONs, to be removed in Druid 0.12.
+      @JsonProperty("buildV9Directly") Boolean buildV9Directly,
       @JsonProperty("context") Map<String, Object> context
   )
   {
@@ -68,7 +71,8 @@ public class MergeTask extends MergeTaskBase
   public File merge(final TaskToolbox toolbox, final Map<DataSegment, File> segments, final File outDir)
       throws Exception
   {
-    return toolbox.getIndexMerger().mergeQueryableIndex(
+    IndexMerger indexMerger = toolbox.getIndexMergerV9();
+    return indexMerger.mergeQueryableIndex(
         Lists.transform(
             ImmutableList.copyOf(segments.values()),
             new Function<File, QueryableIndex>()
@@ -96,6 +100,18 @@ public class MergeTask extends MergeTaskBase
   public String getType()
   {
     return "merge";
+  }
+
+  @JsonProperty
+  public Boolean getRollup()
+  {
+    return rollup;
+  }
+
+  @JsonProperty
+  public IndexSpec getIndexSpec()
+  {
+    return indexSpec;
   }
 
   @JsonProperty("aggregations")

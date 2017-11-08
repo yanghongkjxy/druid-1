@@ -24,8 +24,9 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import io.druid.granularity.QueryGranularities;
-import io.druid.granularity.QueryGranularity;
+import io.druid.java.util.common.DateTimes;
+import io.druid.java.util.common.granularity.Granularities;
+import io.druid.java.util.common.granularity.Granularity;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.PostAggregator;
 import io.druid.query.datasourcemetadata.DataSourceMetadataQuery;
@@ -41,12 +42,12 @@ import io.druid.query.filter.SelectorDimFilter;
 import io.druid.query.metadata.metadata.ColumnIncluderator;
 import io.druid.query.metadata.metadata.SegmentMetadataQuery;
 import io.druid.query.search.SearchResultValue;
-import io.druid.query.search.search.ContainsSearchQuerySpec;
-import io.druid.query.search.search.FragmentSearchQuerySpec;
-import io.druid.query.search.search.InsensitiveContainsSearchQuerySpec;
-import io.druid.query.search.search.SearchQuery;
-import io.druid.query.search.search.SearchQuerySpec;
-import io.druid.query.search.search.SearchSortSpec;
+import io.druid.query.search.ContainsSearchQuerySpec;
+import io.druid.query.search.FragmentSearchQuerySpec;
+import io.druid.query.search.InsensitiveContainsSearchQuerySpec;
+import io.druid.query.search.SearchQuery;
+import io.druid.query.search.SearchQuerySpec;
+import io.druid.query.search.SearchSortSpec;
 import io.druid.query.select.PagingSpec;
 import io.druid.query.select.SelectQuery;
 import io.druid.query.spec.LegacySegmentSpec;
@@ -54,6 +55,8 @@ import io.druid.query.spec.QuerySegmentSpec;
 import io.druid.query.timeboundary.TimeBoundaryQuery;
 import io.druid.query.timeboundary.TimeBoundaryResultValue;
 import io.druid.query.timeseries.TimeseriesQuery;
+import io.druid.segment.VirtualColumn;
+import io.druid.segment.VirtualColumns;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
 
@@ -323,26 +326,28 @@ public class Druids
    *                                        .build();
    * </code></pre>
    *
-   * @see io.druid.query.timeseries.TimeseriesQuery
+   * @see TimeseriesQuery
    */
   public static class TimeseriesQueryBuilder
   {
     private DataSource dataSource;
     private QuerySegmentSpec querySegmentSpec;
+    private boolean descending;
+    private VirtualColumns virtualColumns;
     private DimFilter dimFilter;
-    private QueryGranularity granularity;
+    private Granularity granularity;
     private List<AggregatorFactory> aggregatorSpecs;
     private List<PostAggregator> postAggregatorSpecs;
     private Map<String, Object> context;
-
-    private boolean descending;
 
     private TimeseriesQueryBuilder()
     {
       dataSource = null;
       querySegmentSpec = null;
+      descending = false;
+      virtualColumns = null;
       dimFilter = null;
-      granularity = QueryGranularities.ALL;
+      granularity = Granularities.ALL;
       aggregatorSpecs = Lists.newArrayList();
       postAggregatorSpecs = Lists.newArrayList();
       context = null;
@@ -354,6 +359,7 @@ public class Druids
           dataSource,
           querySegmentSpec,
           descending,
+          virtualColumns,
           dimFilter,
           granularity,
           aggregatorSpecs,
@@ -362,30 +368,18 @@ public class Druids
       );
     }
 
-    public TimeseriesQueryBuilder copy(TimeseriesQuery query)
+    public static TimeseriesQueryBuilder copy(TimeseriesQuery query)
     {
       return new TimeseriesQueryBuilder()
           .dataSource(query.getDataSource())
-          .intervals(query.getIntervals())
-          .filters(query.getDimensionsFilter())
+          .intervals(query.getQuerySegmentSpec())
           .descending(query.isDescending())
+          .virtualColumns(query.getVirtualColumns())
+          .filters(query.getDimensionsFilter())
           .granularity(query.getGranularity())
           .aggregators(query.getAggregatorSpecs())
           .postAggregators(query.getPostAggregatorSpecs())
           .context(query.getContext());
-    }
-
-    public TimeseriesQueryBuilder copy(TimeseriesQueryBuilder builder)
-    {
-      return new TimeseriesQueryBuilder()
-          .dataSource(builder.dataSource)
-          .intervals(builder.querySegmentSpec)
-          .filters(builder.dimFilter)
-          .descending(builder.descending)
-          .granularity(builder.granularity)
-          .aggregators(builder.aggregatorSpecs)
-          .postAggregators(builder.postAggregatorSpecs)
-          .context(builder.context);
     }
 
     public DataSource getDataSource()
@@ -408,7 +402,7 @@ public class Druids
       return descending;
     }
 
-    public QueryGranularity getGranularity()
+    public Granularity getGranularity()
     {
       return granularity;
     }
@@ -458,6 +452,22 @@ public class Druids
       return this;
     }
 
+    public TimeseriesQueryBuilder virtualColumns(VirtualColumns virtualColumns)
+    {
+      this.virtualColumns = virtualColumns;
+      return this;
+    }
+
+    public TimeseriesQueryBuilder virtualColumns(List<VirtualColumn> virtualColumns)
+    {
+      return virtualColumns(VirtualColumns.create(virtualColumns));
+    }
+
+    public TimeseriesQueryBuilder virtualColumns(VirtualColumn... virtualColumns)
+    {
+      return virtualColumns(VirtualColumns.create(Arrays.asList(virtualColumns)));
+    }
+
     public TimeseriesQueryBuilder filters(String dimensionName, String value)
     {
       dimFilter = new SelectorDimFilter(dimensionName, value, null);
@@ -484,11 +494,11 @@ public class Druids
 
     public TimeseriesQueryBuilder granularity(String g)
     {
-      granularity = QueryGranularity.fromString(g);
+      granularity = Granularity.fromString(g);
       return this;
     }
 
-    public TimeseriesQueryBuilder granularity(QueryGranularity g)
+    public TimeseriesQueryBuilder granularity(Granularity g)
     {
       granularity = g;
       return this;
@@ -535,13 +545,13 @@ public class Druids
    *                                  .build();
    * </code></pre>
    *
-   * @see io.druid.query.search.search.SearchQuery
+   * @see SearchQuery
    */
   public static class SearchQueryBuilder
   {
     private DataSource dataSource;
     private DimFilter dimFilter;
-    private QueryGranularity granularity;
+    private Granularity granularity;
     private int limit;
     private QuerySegmentSpec querySegmentSpec;
     private List<DimensionSpec> dimensions;
@@ -553,11 +563,12 @@ public class Druids
     {
       dataSource = null;
       dimFilter = null;
-      granularity = QueryGranularities.ALL;
+      granularity = Granularities.ALL;
       limit = 0;
       querySegmentSpec = null;
       dimensions = null;
       querySpec = null;
+      sortSpec = null;
       context = null;
     }
 
@@ -576,30 +587,18 @@ public class Druids
       );
     }
 
-    public SearchQueryBuilder copy(SearchQuery query)
+    public static SearchQueryBuilder copy(SearchQuery query)
     {
       return new SearchQueryBuilder()
           .dataSource(query.getDataSource())
-          .intervals(query.getQuerySegmentSpec())
           .filters(query.getDimensionsFilter())
           .granularity(query.getGranularity())
           .limit(query.getLimit())
+          .intervals(query.getQuerySegmentSpec())
           .dimensions(query.getDimensions())
           .query(query.getQuery())
+          .sortSpec(query.getSort())
           .context(query.getContext());
-    }
-
-    public SearchQueryBuilder copy(SearchQueryBuilder builder)
-    {
-      return new SearchQueryBuilder()
-          .dataSource(builder.dataSource)
-          .intervals(builder.querySegmentSpec)
-          .filters(builder.dimFilter)
-          .granularity(builder.granularity)
-          .limit(builder.limit)
-          .dimensions(builder.dimensions)
-          .query(builder.querySpec)
-          .context(builder.context);
     }
 
     public SearchQueryBuilder dataSource(String d)
@@ -634,11 +633,11 @@ public class Druids
 
     public SearchQueryBuilder granularity(String g)
     {
-      granularity = QueryGranularity.fromString(g);
+      granularity = Granularity.fromString(g);
       return this;
     }
 
-    public SearchQueryBuilder granularity(QueryGranularity g)
+    public SearchQueryBuilder granularity(Granularity g)
     {
       granularity = g;
       return this;
@@ -768,7 +767,7 @@ public class Druids
    *                                  .build();
    * </code></pre>
    *
-   * @see io.druid.query.timeboundary.TimeBoundaryQuery
+   * @see TimeBoundaryQuery
    */
   public static class TimeBoundaryQueryBuilder
   {
@@ -798,14 +797,14 @@ public class Druids
       );
     }
 
-    public TimeBoundaryQueryBuilder copy(TimeBoundaryQueryBuilder builder)
+    public static TimeBoundaryQueryBuilder copy(TimeBoundaryQuery query)
     {
       return new TimeBoundaryQueryBuilder()
-          .dataSource(builder.dataSource)
-          .intervals(builder.querySegmentSpec)
-          .bound(builder.bound)
-          .filters(builder.dimFilter)
-          .context(builder.context);
+          .dataSource(query.getDataSource())
+          .intervals(query.getQuerySegmentSpec())
+          .bound(query.getBound())
+          .filters(query.getFilter())
+          .context(query.getContext());
     }
 
     public TimeBoundaryQueryBuilder dataSource(String ds)
@@ -896,7 +895,7 @@ public class Druids
 
     public ResultBuilder()
     {
-      timestamp = new DateTime(0);
+      timestamp = DateTimes.EPOCH;
       value = null;
     }
 
@@ -953,7 +952,7 @@ public class Druids
    *                                  .build();
    * </code></pre>
    *
-   * @see io.druid.query.metadata.metadata.SegmentMetadataQuery
+   * @see SegmentMetadataQuery
    */
   public static class SegmentMetadataQueryBuilder
   {
@@ -972,8 +971,8 @@ public class Druids
       toInclude = null;
       analysisTypes = null;
       merge = null;
-      context = null;
       lenientAggregatorMerge = null;
+      context = null;
     }
 
     public SegmentMetadataQuery build()
@@ -990,20 +989,16 @@ public class Druids
       );
     }
 
-    public SegmentMetadataQueryBuilder copy(SegmentMetadataQueryBuilder builder)
+    public static SegmentMetadataQueryBuilder copy(SegmentMetadataQuery query)
     {
-      final SegmentMetadataQuery.AnalysisType[] analysisTypesArray =
-          analysisTypes != null
-          ? analysisTypes.toArray(new SegmentMetadataQuery.AnalysisType[analysisTypes.size()])
-          : null;
       return new SegmentMetadataQueryBuilder()
-          .dataSource(builder.dataSource)
-          .intervals(builder.querySegmentSpec)
-          .toInclude(toInclude)
-          .analysisTypes(analysisTypesArray)
-          .merge(merge)
-          .lenientAggregatorMerge(lenientAggregatorMerge)
-          .context(builder.context);
+          .dataSource(query.getDataSource())
+          .intervals(query.getQuerySegmentSpec())
+          .toInclude(query.getToInclude())
+          .analysisTypes(query.getAnalysisTypes())
+          .merge(query.isMerge())
+          .lenientAggregatorMerge(query.isLenientAggregatorMerge())
+          .context(query.getContext());
     }
 
     public SegmentMetadataQueryBuilder dataSource(String ds)
@@ -1054,6 +1049,12 @@ public class Druids
       return this;
     }
 
+    public SegmentMetadataQueryBuilder analysisTypes(EnumSet<SegmentMetadataQuery.AnalysisType> analysisTypes)
+    {
+      this.analysisTypes = analysisTypes;
+      return this;
+    }
+
     public SegmentMetadataQueryBuilder merge(boolean merge)
     {
       this.merge = merge;
@@ -1091,7 +1092,7 @@ public class Druids
    *                                  .build();
    * </code></pre>
    *
-   * @see io.druid.query.select.SelectQuery
+   * @see SelectQuery
    */
   public static class SelectQueryBuilder
   {
@@ -1100,20 +1101,23 @@ public class Druids
     private boolean descending;
     private Map<String, Object> context;
     private DimFilter dimFilter;
-    private QueryGranularity granularity;
+    private Granularity granularity;
     private List<DimensionSpec> dimensions;
     private List<String> metrics;
+    private VirtualColumns virtualColumns;
     private PagingSpec pagingSpec;
 
     public SelectQueryBuilder()
     {
       dataSource = null;
       querySegmentSpec = null;
+      descending = false;
       context = null;
       dimFilter = null;
-      granularity = QueryGranularities.ALL;
+      granularity = Granularities.ALL;
       dimensions = Lists.newArrayList();
       metrics = Lists.newArrayList();
+      virtualColumns = null;
       pagingSpec = null;
     }
 
@@ -1125,17 +1129,27 @@ public class Druids
           descending,
           dimFilter,
           granularity,
-          dimensions, metrics, pagingSpec,
+          dimensions,
+          metrics,
+          virtualColumns,
+          pagingSpec,
           context
       );
     }
 
-    public SelectQueryBuilder copy(SelectQueryBuilder builder)
+    public static SelectQueryBuilder copy(SelectQuery query)
     {
       return new SelectQueryBuilder()
-          .dataSource(builder.dataSource)
-          .intervals(builder.querySegmentSpec)
-          .context(builder.context);
+          .dataSource(query.getDataSource())
+          .intervals(query.getQuerySegmentSpec())
+          .descending(query.isDescending())
+          .filters(query.getFilter())
+          .granularity(query.getGranularity())
+          .dimensionSpecs(query.getDimensions())
+          .metrics(query.getMetrics())
+          .virtualColumns(query.getVirtualColumns())
+          .pagingSpec(query.getPagingSpec())
+          .context(query.getContext());
     }
 
     public SelectQueryBuilder dataSource(String ds)
@@ -1200,11 +1214,11 @@ public class Druids
 
     public SelectQueryBuilder granularity(String g)
     {
-      granularity = QueryGranularity.fromString(g);
+      granularity = Granularity.fromString(g);
       return this;
     }
 
-    public SelectQueryBuilder granularity(QueryGranularity g)
+    public SelectQueryBuilder granularity(Granularity g)
     {
       granularity = g;
       return this;
@@ -1226,6 +1240,22 @@ public class Druids
     {
       metrics = m;
       return this;
+    }
+
+    public SelectQueryBuilder virtualColumns(VirtualColumns vcs)
+    {
+      virtualColumns = vcs;
+      return this;
+    }
+
+    public SelectQueryBuilder virtualColumns(List<VirtualColumn> vcs)
+    {
+      return virtualColumns(VirtualColumns.create(vcs));
+    }
+
+    public SelectQueryBuilder virtualColumns(VirtualColumn... vcs)
+    {
+      return virtualColumns(VirtualColumns.create(Arrays.asList(vcs)));
     }
 
     public SelectQueryBuilder pagingSpec(PagingSpec p)
@@ -1252,7 +1282,7 @@ public class Druids
    *                                  .build();
    * </code></pre>
    *
-   * @see io.druid.query.datasourcemetadata.DataSourceMetadataQuery
+   * @see DataSourceMetadataQuery
    */
   public static class DataSourceMetadataQueryBuilder
   {
@@ -1276,12 +1306,12 @@ public class Druids
       );
     }
 
-    public DataSourceMetadataQueryBuilder copy(DataSourceMetadataQueryBuilder builder)
+    public static DataSourceMetadataQueryBuilder copy(DataSourceMetadataQuery query)
     {
       return new DataSourceMetadataQueryBuilder()
-          .dataSource(builder.dataSource)
-          .intervals(builder.querySegmentSpec)
-          .context(builder.context);
+          .dataSource(query.getDataSource())
+          .intervals(query.getQuerySegmentSpec())
+          .context(query.getContext());
     }
 
     public DataSourceMetadataQueryBuilder dataSource(String ds)

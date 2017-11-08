@@ -1,21 +1,21 @@
 /*
-* Licensed to Metamarkets Group Inc. (Metamarkets) under one
-* or more contributor license agreements. See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership. Metamarkets licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License. You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing,
-* software distributed under the License is distributed on an
-* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-* KIND, either express or implied. See the License for the
-* specific language governing permissions and limitations
-* under the License.
-*/
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
 
 package io.druid.guice;
 
@@ -24,6 +24,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.introspect.AnnotatedField;
 import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
@@ -33,7 +34,7 @@ import com.google.common.collect.Maps;
 import com.google.inject.Inject;
 import com.google.inject.ProvisionException;
 import com.google.inject.spi.Message;
-
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 
 import javax.validation.ConstraintViolation;
@@ -42,6 +43,7 @@ import javax.validation.Path;
 import javax.validation.Validator;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -69,7 +71,7 @@ public class JsonConfigurator
 
   public <T> T configurate(Properties props, String propertyPrefix, Class<T> clazz) throws ProvisionException
   {
-    verifyClazzIsConfigurable(clazz);
+    verifyClazzIsConfigurable(jsonMapper, clazz);
 
     // Make it end with a period so we only include properties with sub-object thingies.
     final String propertyBase = propertyPrefix.endsWith(".") ? propertyPrefix : propertyPrefix + ".";
@@ -82,7 +84,7 @@ public class JsonConfigurator
         try {
           // If it's a String Jackson wants it to be quoted, so check if it's not an object or array and quote.
           String modifiedPropValue = propValue;
-          if (! (modifiedPropValue.startsWith("[") || modifiedPropValue.startsWith("{"))) {
+          if (!(modifiedPropValue.startsWith("[") || modifiedPropValue.startsWith("{"))) {
             modifiedPropValue = jsonMapper.writeValueAsString(propValue);
           }
           value = jsonMapper.readValue(modifiedPropValue, Object.class);
@@ -92,7 +94,7 @@ public class JsonConfigurator
           value = propValue;
         }
 
-        jsonMap.put(prop.substring(propertyBase.length()), value);
+        hieraricalPutValue(propertyPrefix, prop, prop.substring(propertyBase.length()), value, jsonMap);
       }
     }
 
@@ -102,7 +104,7 @@ public class JsonConfigurator
     }
     catch (IllegalArgumentException e) {
       throw new ProvisionException(
-          String.format("Problem parsing object at prefix[%s]: %s.", propertyPrefix, e.getMessage()), e
+          StringUtils.format("Problem parsing object at prefix[%s]: %s.", propertyPrefix, e.getMessage()), e
       );
     }
 
@@ -111,7 +113,7 @@ public class JsonConfigurator
       List<String> messages = Lists.newArrayList();
 
       for (ConstraintViolation<T> violation : violations) {
-        String path = "";
+        StringBuilder path = new StringBuilder();
         try {
           Class<?> beanClazz = violation.getRootBeanClass();
           final Iterator<Path.Node> iter = violation.getPropertyPath().iterator();
@@ -122,18 +124,17 @@ public class JsonConfigurator
               final Field theField = beanClazz.getDeclaredField(fieldName);
 
               if (theField.getAnnotation(JacksonInject.class) != null) {
-                path = String.format(" -- Injected field[%s] not bound!?", fieldName);
+                path = new StringBuilder(StringUtils.format(" -- Injected field[%s] not bound!?", fieldName));
                 break;
               }
 
               JsonProperty annotation = theField.getAnnotation(JsonProperty.class);
               final boolean noAnnotationValue = annotation == null || Strings.isNullOrEmpty(annotation.value());
               final String pathPart = noAnnotationValue ? fieldName : annotation.value();
-              if (path.isEmpty()) {
-                path += pathPart;
-              }
-              else {
-                path += "." + pathPart;
+              if (path.length() == 0) {
+                path.append(pathPart);
+              } else {
+                path.append(".").append(pathPart);
               }
             }
           }
@@ -142,7 +143,7 @@ public class JsonConfigurator
           throw Throwables.propagate(e);
         }
 
-        messages.add(String.format("%s - %s", path, violation.getMessage()));
+        messages.add(StringUtils.format("%s - %s", path.toString(), violation.getMessage()));
       }
 
       throw new ProvisionException(
@@ -153,7 +154,7 @@ public class JsonConfigurator
                 @Override
                 public Message apply(String input)
                 {
-                  return new Message(String.format("%s%s", propertyBase, input));
+                  return new Message(StringUtils.format("%s%s", propertyBase, input));
                 }
               }
           )
@@ -165,16 +166,54 @@ public class JsonConfigurator
     return config;
   }
 
-  private <T> void verifyClazzIsConfigurable(Class<T> clazz)
+  private static void hieraricalPutValue(
+      String propertyPrefix,
+      String originalProperty,
+      String property,
+      Object value,
+      Map<String, Object> targetMap
+  )
   {
-    final List<BeanPropertyDefinition> beanDefs = jsonMapper.getSerializationConfig()
-                                                              .introspect(jsonMapper.constructType(clazz))
-                                                              .findProperties();
+    int dotIndex = property.indexOf('.');
+    if (dotIndex < 0) {
+      targetMap.put(property, value);
+      return;
+    }
+    if (dotIndex == 0) {
+      throw new ProvisionException(StringUtils.format("Double dot in property: %s", originalProperty));
+    }
+    if (dotIndex == property.length() - 1) {
+      throw new ProvisionException(StringUtils.format("Dot at the end of property: %s", originalProperty));
+    }
+    String nestedKey = property.substring(0, dotIndex);
+    Object nested = targetMap.computeIfAbsent(nestedKey, k -> new HashMap<String, Object>());
+    if (!(nested instanceof Map)) {
+      // Clash is possible between properties, which are used to configure different objects: e. g.
+      // druid.emitter=parametrized is used to configure Emitter class, and druid.emitter.parametrized.xxx=yyy is used
+      // to configure ParametrizedUriEmitterConfig object. So skipping xxx=yyy key-value pair when configuring Emitter
+      // doesn't make any difference. That is why we just log this situation, instead of throwing an exception.
+      log.info(
+          "Skipping %s property: one of it's prefixes is also used as a property key. Prefix: %s",
+          originalProperty,
+          propertyPrefix
+      );
+      return;
+    }
+    Map<String, Object> nestedMap = (Map<String, Object>) nested;
+    hieraricalPutValue(propertyPrefix, originalProperty, property.substring(dotIndex + 1), value, nestedMap);
+  }
+
+  @VisibleForTesting
+  public static <T> void verifyClazzIsConfigurable(ObjectMapper mapper, Class<T> clazz)
+  {
+    final List<BeanPropertyDefinition> beanDefs = mapper.getSerializationConfig()
+                                                        .introspect(mapper.constructType(clazz))
+                                                        .findProperties();
     for (BeanPropertyDefinition beanDef : beanDefs) {
       final AnnotatedField field = beanDef.getField();
       if (field == null || !field.hasAnnotation(JsonProperty.class)) {
         throw new ProvisionException(
-            String.format(
+            StringUtils.format(
                 "JsonConfigurator requires Jackson-annotated Config objects to have field annotations. %s doesn't",
                 clazz
             )

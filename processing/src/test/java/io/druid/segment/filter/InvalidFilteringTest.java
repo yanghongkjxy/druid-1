@@ -28,20 +28,17 @@ import io.druid.data.input.impl.InputRowParser;
 import io.druid.data.input.impl.MapInputRowParser;
 import io.druid.data.input.impl.TimeAndDimsParseSpec;
 import io.druid.data.input.impl.TimestampSpec;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.Pair;
-import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.CountAggregatorFactory;
 import io.druid.query.aggregation.DoubleMaxAggregatorFactory;
 import io.druid.query.aggregation.hyperloglog.HyperUniquesAggregatorFactory;
-import io.druid.query.filter.DimFilter;
 import io.druid.query.filter.InDimFilter;
 import io.druid.query.filter.SelectorDimFilter;
 import io.druid.segment.IndexBuilder;
 import io.druid.segment.StorageAdapter;
 import io.druid.segment.incremental.IncrementalIndexSchema;
-import org.joda.time.DateTime;
 import org.junit.AfterClass;
-import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -59,7 +56,7 @@ public class InvalidFilteringTest extends BaseFilterTest
 
   private static final InputRowParser<Map<String, Object>> PARSER = new MapInputRowParser(
       new TimeAndDimsParseSpec(
-          new TimestampSpec(TIMESTAMP_COLUMN, "millis", new DateTime("2000")),
+          new TimestampSpec(TIMESTAMP_COLUMN, "millis", DateTimes.of("2000")),
           new DimensionsSpec(
               DimensionsSpec.getDefaultSchemas(ImmutableList.of("dim0", "dim1", "dim2", "dim3")),
               null,
@@ -88,19 +85,21 @@ public class InvalidFilteringTest extends BaseFilterTest
       String testName,
       IndexBuilder indexBuilder,
       Function<IndexBuilder, Pair<StorageAdapter, Closeable>> finisher,
+      boolean cnf,
       boolean optimize
   )
   {
-    super(testName, ROWS, overrideIndexBuilderSchema(indexBuilder), finisher, optimize);
+    super(testName, ROWS, overrideIndexBuilderSchema(indexBuilder), finisher, cnf, optimize);
   }
 
   private static IndexBuilder overrideIndexBuilderSchema(IndexBuilder indexBuilder)
   {
-    IncrementalIndexSchema schema = new IncrementalIndexSchema.Builder().withMetrics(new AggregatorFactory[]{
-        new CountAggregatorFactory("count"),
-        new HyperUniquesAggregatorFactory("hyperion", "dim1"),
-        new DoubleMaxAggregatorFactory("dmax", "dim0")
-    }).build();
+    IncrementalIndexSchema schema = new IncrementalIndexSchema.Builder()
+        .withMetrics(
+            new CountAggregatorFactory("count"),
+            new HyperUniquesAggregatorFactory("hyperion", "dim1"),
+            new DoubleMaxAggregatorFactory("dmax", "dim0")
+        ).build();
 
     return indexBuilder.schema(schema);
   }
@@ -125,16 +124,6 @@ public class InvalidFilteringTest extends BaseFilterTest
         ImmutableList.<String>of("1", "2", "3", "4", "5", "6")
     );
 
-    assertFilterMatches(
-        new SelectorDimFilter("dmax", "another string", null),
-        ImmutableList.<String>of()
-    );
-
-    assertFilterMatches(
-        new SelectorDimFilter("dmax", null, null),
-        ImmutableList.<String>of("1", "2", "3", "4", "5", "6")
-    );
-
     // predicate based matching
     assertFilterMatches(
         new InDimFilter("hyperion", Arrays.asList("hello", "world"), null),
@@ -145,24 +134,5 @@ public class InvalidFilteringTest extends BaseFilterTest
         new InDimFilter("hyperion", Arrays.asList("hello", "world", null), null),
         ImmutableList.<String>of("1", "2", "3", "4", "5", "6")
     );
-
-    assertFilterMatches(
-        new InDimFilter("dmax", Arrays.asList("hello", "world"), null),
-        ImmutableList.<String>of()
-    );
-
-    assertFilterMatches(
-        new InDimFilter("dmax", Arrays.asList("hello", "world", null), null),
-        ImmutableList.<String>of("1", "2", "3", "4", "5", "6")
-    );
-  }
-
-  private void assertFilterMatches(
-      final DimFilter filter,
-      final List<String> expectedRows
-  )
-  {
-    Assert.assertEquals(filter.toString(), expectedRows, selectColumnValuesMatchingFilter(filter, "dim0"));
-    Assert.assertEquals(filter.toString(), expectedRows.size(), selectCountUsingFilteredAggregator(filter));
   }
 }

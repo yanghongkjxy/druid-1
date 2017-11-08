@@ -25,7 +25,10 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import io.druid.java.util.common.IAE;
+import io.druid.query.Queries;
+import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.PostAggregator;
+import io.druid.query.cache.CacheKeyBuilder;
 
 import java.util.Comparator;
 import java.util.Iterator;
@@ -52,6 +55,7 @@ public class ArithmeticPostAggregator implements PostAggregator
   private final Ops op;
   private final Comparator comparator;
   private final String ordering;
+  private Map<String, AggregatorFactory> aggFactoryMap;
 
   public ArithmeticPostAggregator(
       String name,
@@ -123,6 +127,28 @@ public class ArithmeticPostAggregator implements PostAggregator
     return name;
   }
 
+  @Override
+  public ArithmeticPostAggregator decorate(Map<String, AggregatorFactory> aggregators)
+  {
+    return new ArithmeticPostAggregator(name, fnName, Queries.decoratePostAggregators(fields, aggregators), ordering);
+  }
+
+  @Override
+  public byte[] getCacheKey()
+  {
+    final CacheKeyBuilder builder = new CacheKeyBuilder(PostAggregatorIds.ARITHMETIC)
+        .appendString(fnName)
+        .appendString(ordering);
+
+    if (preserveFieldOrderInCacheKey(op)) {
+      builder.appendCacheables(fields);
+    } else {
+      builder.appendCacheablesIgnoringOrder(fields);
+    }
+
+    return builder.build();
+  }
+
   @JsonProperty("fn")
   public String getFnName()
   {
@@ -152,43 +178,58 @@ public class ArithmeticPostAggregator implements PostAggregator
            '}';
   }
 
-  private static enum Ops
+  private static boolean preserveFieldOrderInCacheKey(Ops op)
   {
-    PLUS("+")
-        {
-          public double compute(double lhs, double rhs)
-          {
-            return lhs + rhs;
-          }
-        },
-    MINUS("-")
-        {
-          public double compute(double lhs, double rhs)
-          {
-            return lhs - rhs;
-          }
-        },
-    MULT("*")
-        {
-          public double compute(double lhs, double rhs)
-          {
-            return lhs * rhs;
-          }
-        },
-    DIV("/")
-        {
-          public double compute(double lhs, double rhs)
-          {
-            return (rhs == 0.0) ? 0 : (lhs / rhs);
-          }
-        },
-    QUOTIENT("quotient")
-        {
-          public double compute(double lhs, double rhs)
-          {
-            return lhs / rhs;
-          }
-        };
+    switch (op) {
+      case PLUS:
+      case MULT:
+        return false;
+      case MINUS:
+      case DIV:
+      case QUOTIENT:
+        return true;
+      default:
+        throw new IAE(op.fn);
+    }
+  }
+
+  private enum Ops
+  {
+    PLUS("+") {
+      @Override
+      public double compute(double lhs, double rhs)
+      {
+        return lhs + rhs;
+      }
+    },
+    MINUS("-") {
+      @Override
+      public double compute(double lhs, double rhs)
+      {
+        return lhs - rhs;
+      }
+    },
+    MULT("*") {
+      @Override
+      public double compute(double lhs, double rhs)
+      {
+        return lhs * rhs;
+      }
+    },
+    DIV("/") {
+      @Override
+      public double compute(double lhs, double rhs)
+      {
+        return (rhs == 0.0) ? 0 : (lhs / rhs);
+      }
+    },
+    QUOTIENT("quotient") {
+      @Override
+      public double compute(double lhs, double rhs)
+      {
+        return lhs / rhs;
+      }
+    };
 
     private static final Map<String, Ops> lookupMap = Maps.newHashMap();
 
@@ -223,22 +264,21 @@ public class ArithmeticPostAggregator implements PostAggregator
     }
   }
 
-  public static enum Ordering implements Comparator<Double> {
+  public enum Ordering implements Comparator<Double>
+  {
     // ensures the following order: numeric > NaN > Infinite
+    // The name may be referenced via Ordering.valueOf(ordering) in the constructor.
     numericFirst {
-      public int compare(Double lhs, Double rhs) {
-        if(isFinite(lhs) && !isFinite(rhs)) {
+      @Override
+      public int compare(Double lhs, Double rhs)
+      {
+        if (Double.isFinite(lhs) && !Double.isFinite(rhs)) {
           return 1;
         }
-        if(!isFinite(lhs) && isFinite(rhs)) {
+        if (!Double.isFinite(lhs) && Double.isFinite(rhs)) {
           return -1;
         }
         return Double.compare(lhs, rhs);
-      }
-
-      // Double.isFinite only exist in JDK8
-      private boolean isFinite(double value) {
-        return !Double.isInfinite(value) && !Double.isNaN(value);
       }
     }
   }

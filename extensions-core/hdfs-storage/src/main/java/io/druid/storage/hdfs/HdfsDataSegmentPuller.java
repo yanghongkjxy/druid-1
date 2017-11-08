@@ -23,11 +23,11 @@ import com.google.common.base.Predicate;
 import com.google.common.base.Throwables;
 import com.google.common.io.ByteSource;
 import com.google.inject.Inject;
-
 import io.druid.java.util.common.CompressionUtils;
 import io.druid.java.util.common.FileUtils;
 import io.druid.java.util.common.IAE;
 import io.druid.java.util.common.RetryUtils;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.UOE;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.segment.loading.DataSegmentPuller;
@@ -36,7 +36,6 @@ import io.druid.segment.loading.URIDataPuller;
 import io.druid.timeline.DataSegment;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
@@ -49,7 +48,6 @@ import java.io.OutputStream;
 import java.io.Reader;
 import java.io.Writer;
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.concurrent.Callable;
 
 /**
@@ -177,7 +175,6 @@ public class HdfsDataSegmentPuller implements DataSegmentPuller, URIDataPuller
 
   public FileUtils.FileCopyResult getSegmentFiles(final Path path, final File outDir) throws SegmentLoadingException
   {
-    final LocalFileSystem localFileSystem = new LocalFileSystem();
     try {
       final FileSystem fs = path.getFileSystem(config);
       if (fs.isDirectory(path)) {
@@ -196,7 +193,6 @@ public class HdfsDataSegmentPuller implements DataSegmentPuller, URIDataPuller
                   }
 
                   final RemoteIterator<LocatedFileStatus> children = fs.listFiles(path, false);
-                  final ArrayList<FileUtils.FileCopyResult> localChildren = new ArrayList<>();
                   final FileUtils.FileCopyResult result = new FileUtils.FileCopyResult();
                   while (children.hasNext()) {
                     final LocatedFileStatus child = children.next();
@@ -321,7 +317,7 @@ public class HdfsDataSegmentPuller implements DataSegmentPuller, URIDataPuller
   public String getVersion(URI uri) throws IOException
   {
     try {
-      return String.format("%d", buildFileObject(uri, config).getLastModified());
+      return StringUtils.format("%d", buildFileObject(uri, config).getLastModified());
     }
     catch (HdfsIOException ex) {
       throw ex.getIOException();

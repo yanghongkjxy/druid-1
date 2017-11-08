@@ -20,12 +20,13 @@
 package io.druid.segment.filter;
 
 import com.google.common.base.Predicate;
-import com.metamx.collections.bitmap.ImmutableBitmap;
+import io.druid.query.BitmapResultFactory;
 import io.druid.query.filter.BitmapIndexSelector;
 import io.druid.query.filter.Filter;
 import io.druid.query.filter.JavaScriptDimFilter;
 import io.druid.query.filter.ValueMatcher;
-import io.druid.query.filter.ValueMatcherFactory;
+import io.druid.segment.ColumnSelector;
+import io.druid.segment.ColumnSelectorFactory;
 import org.mozilla.javascript.Context;
 
 public class JavaScriptFilter implements Filter
@@ -43,20 +44,11 @@ public class JavaScriptFilter implements Filter
   }
 
   @Override
-  public ImmutableBitmap getBitmapIndex(final BitmapIndexSelector selector)
+  public <T> T getBitmapResult(BitmapIndexSelector selector, BitmapResultFactory<T> bitmapResultFactory)
   {
     final Context cx = Context.enter();
     try {
-      final Predicate<String> contextualPredicate = new Predicate<String>()
-      {
-        @Override
-        public boolean apply(String input)
-        {
-          return predicateFactory.applyInContext(cx, input);
-        }
-      };
-
-      return Filters.matchPredicate(dimension, selector, contextualPredicate);
+      return Filters.matchPredicate(dimension, selector, bitmapResultFactory, makeStringPredicate(cx));
     }
     finally {
       Context.exit();
@@ -64,15 +56,47 @@ public class JavaScriptFilter implements Filter
   }
 
   @Override
-  public ValueMatcher makeMatcher(ValueMatcherFactory factory)
+  public double estimateSelectivity(BitmapIndexSelector indexSelector)
+  {
+    final Context cx = Context.enter();
+    try {
+      return Filters.estimateSelectivity(dimension, indexSelector, makeStringPredicate(cx));
+    }
+    finally {
+      Context.exit();
+    }
+  }
+
+  private Predicate<String> makeStringPredicate(final Context context)
+  {
+    return new Predicate<String>()
+    {
+      @Override
+      public boolean apply(String input)
+      {
+        return predicateFactory.applyInContext(context, input);
+      }
+    };
+  }
+
+  @Override
+  public ValueMatcher makeMatcher(ColumnSelectorFactory factory)
   {
     // suboptimal, since we need create one context per call to predicate.apply()
-    return factory.makeValueMatcher(dimension, predicateFactory);
+    return Filters.makeValueMatcher(factory, dimension, predicateFactory);
   }
 
   @Override
   public boolean supportsBitmapIndex(BitmapIndexSelector selector)
   {
     return selector.getBitmapIndex(dimension) != null;
+  }
+
+  @Override
+  public boolean supportsSelectivityEstimation(
+      ColumnSelector columnSelector, BitmapIndexSelector indexSelector
+  )
+  {
+    return Filters.supportsSelectivityEstimation(this, dimension, columnSelector, indexSelector);
   }
 }

@@ -23,7 +23,11 @@ import com.google.common.base.Predicate;
 
 public interface DruidPredicateFactory
 {
-  public Predicate<String> makeStringPredicate();
+  Predicate<String> makeStringPredicate();
 
-  public DruidLongPredicate makeLongPredicate();
+  DruidLongPredicate makeLongPredicate();
+
+  DruidFloatPredicate makeFloatPredicate();
+
+  DruidDoublePredicate makeDoublePredicate();
 }

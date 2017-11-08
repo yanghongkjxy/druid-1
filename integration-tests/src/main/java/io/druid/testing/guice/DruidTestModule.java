@@ -30,19 +30,16 @@ import com.metamx.emitter.core.LoggingEmitterConfig;
 import com.metamx.emitter.service.ServiceEmitter;
 import com.metamx.http.client.CredentialedHttpClient;
 import com.metamx.http.client.HttpClient;
-import com.metamx.http.client.HttpClientConfig;
-import com.metamx.http.client.HttpClientInit;
 import com.metamx.http.client.auth.BasicCredentials;
 import io.druid.curator.CuratorConfig;
 import io.druid.guice.JsonConfigProvider;
-import io.druid.guice.LazySingleton;
 import io.druid.guice.ManageLifecycle;
-import io.druid.guice.http.DruidHttpClientConfig;
+import io.druid.guice.annotations.EscalatedClient;
+import io.druid.guice.annotations.Self;
+import io.druid.server.DruidNode;
 import io.druid.testing.IntegrationTestingConfig;
 import io.druid.testing.IntegrationTestingConfigProvider;
 import io.druid.testing.IntegrationTestingCuratorConfig;
-
-import javax.net.ssl.SSLContext;
 
 /**
  */
@@ -57,34 +54,30 @@ public class DruidTestModule implements Module
     JsonConfigProvider.bind(binder, "druid.test.config", IntegrationTestingConfigProvider.class);
 
     binder.bind(CuratorConfig.class).to(IntegrationTestingCuratorConfig.class);
+
+    // Bind DruidNode instance to make Guice happy. This instance is currently unused.
+    binder.bind(DruidNode.class).annotatedWith(Self.class).toInstance(
+        new DruidNode("integration-tests", "localhost", 9191, null, null, true, false)
+    );
   }
 
   @Provides
   @TestClient
   public HttpClient getHttpClient(
-    IntegrationTestingConfig config,
-    DruidHttpClientConfig httpClientConfig,
-    Lifecycle lifecycle
-  )
-    throws Exception
+      IntegrationTestingConfig config,
+      Lifecycle lifecycle,
+      @EscalatedClient HttpClient delegate
+  ) throws Exception
   {
-
-    final HttpClientConfig.Builder builder = HttpClientConfig
-      .builder()
-      .withNumConnections(httpClientConfig.getNumConnections())
-      .withReadTimeout(httpClientConfig.getReadTimeout())
-      .withWorkerCount(httpClientConfig.getNumMaxThreads());
-
-    builder.withSslContext(SSLContext.getDefault());
-    HttpClient delegate = HttpClientInit.createClient(builder.build(), lifecycle);
     if (config.getUsername() != null) {
       return new CredentialedHttpClient(new BasicCredentials(config.getUsername(), config.getPassword()), delegate);
+    } else {
+      return delegate;
     }
-    return delegate;
   }
 
   @Provides
-  @LazySingleton
+  @ManageLifecycle
   public ServiceEmitter getServiceEmitter(Supplier<LoggingEmitterConfig> config, ObjectMapper jsonMapper)
   {
     return new ServiceEmitter("", "", new LoggingEmitter(config.get(), jsonMapper));

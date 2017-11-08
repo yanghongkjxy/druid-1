@@ -21,15 +21,15 @@ package io.druid.query.groupby;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableMap;
-import io.druid.granularity.QueryGranularities;
-import io.druid.jackson.DefaultObjectMapper;
-import org.joda.time.Interval;
+import io.druid.java.util.common.Intervals;
+import io.druid.java.util.common.granularity.Granularities;
+import io.druid.segment.TestHelper;
 import org.junit.Assert;
 import org.junit.Test;
 
 public class GroupByQueryConfigTest
 {
-  private final ObjectMapper MAPPER = new DefaultObjectMapper();
+  private final ObjectMapper MAPPER = TestHelper.getJsonMapper();
 
   private final ImmutableMap<String, String> CONFIG_MAP = ImmutableMap
       .<String, String>builder()
@@ -65,8 +65,8 @@ public class GroupByQueryConfigTest
     final GroupByQueryConfig config2 = config.withOverrides(
         GroupByQuery.builder()
                     .setDataSource("test")
-                    .setInterval(new Interval("2000/P1D"))
-                    .setGranularity(QueryGranularities.ALL)
+                    .setInterval(Intervals.of("2000/P1D"))
+                    .setGranularity(Granularities.ALL)
                     .build()
     );
 
@@ -87,8 +87,8 @@ public class GroupByQueryConfigTest
     final GroupByQueryConfig config2 = config.withOverrides(
         GroupByQuery.builder()
                     .setDataSource("test")
-                    .setInterval(new Interval("2000/P1D"))
-                    .setGranularity(QueryGranularities.ALL)
+                    .setInterval(Intervals.of("2000/P1D"))
+                    .setGranularity(Granularities.ALL)
                     .setContext(
                         ImmutableMap.<String, Object>of(
                             "groupByStrategy", "v1",

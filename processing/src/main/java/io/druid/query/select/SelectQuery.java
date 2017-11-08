@@ -23,17 +23,20 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.google.common.base.Preconditions;
-import io.druid.granularity.QueryGranularity;
+import io.druid.java.util.common.granularity.Granularity;
 import io.druid.query.BaseQuery;
 import io.druid.query.DataSource;
+import io.druid.query.Druids;
 import io.druid.query.Query;
 import io.druid.query.Result;
 import io.druid.query.dimension.DimensionSpec;
 import io.druid.query.filter.DimFilter;
 import io.druid.query.spec.QuerySegmentSpec;
+import io.druid.segment.VirtualColumns;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  */
@@ -41,9 +44,10 @@ import java.util.Map;
 public class SelectQuery extends BaseQuery<Result<SelectResultValue>>
 {
   private final DimFilter dimFilter;
-  private final QueryGranularity granularity;
+  private final Granularity granularity;
   private final List<DimensionSpec> dimensions;
   private final List<String> metrics;
+  private final VirtualColumns virtualColumns;
   private final PagingSpec pagingSpec;
 
   @JsonCreator
@@ -52,9 +56,10 @@ public class SelectQuery extends BaseQuery<Result<SelectResultValue>>
       @JsonProperty("intervals") QuerySegmentSpec querySegmentSpec,
       @JsonProperty("descending") boolean descending,
       @JsonProperty("filter") DimFilter dimFilter,
-      @JsonProperty("granularity") QueryGranularity granularity,
+      @JsonProperty("granularity") Granularity granularity,
       @JsonProperty("dimensions") List<DimensionSpec> dimensions,
       @JsonProperty("metrics") List<String> metrics,
+      @JsonProperty("virtualColumns") VirtualColumns virtualColumns,
       @JsonProperty("pagingSpec") PagingSpec pagingSpec,
       @JsonProperty("context") Map<String, Object> context
   )
@@ -63,6 +68,7 @@ public class SelectQuery extends BaseQuery<Result<SelectResultValue>>
     this.dimFilter = dimFilter;
     this.granularity = granularity;
     this.dimensions = dimensions;
+    this.virtualColumns = VirtualColumns.nullToEmpty(virtualColumns);
     this.metrics = metrics;
     this.pagingSpec = pagingSpec;
 
@@ -105,7 +111,7 @@ public class SelectQuery extends BaseQuery<Result<SelectResultValue>>
   }
 
   @JsonProperty
-  public QueryGranularity getGranularity()
+  public Granularity getGranularity()
   {
     return granularity;
   }
@@ -128,100 +134,60 @@ public class SelectQuery extends BaseQuery<Result<SelectResultValue>>
     return metrics;
   }
 
+  @JsonProperty
+  public VirtualColumns getVirtualColumns()
+  {
+    return virtualColumns;
+  }
+
   public PagingOffset getPagingOffset(String identifier)
   {
     return pagingSpec.getOffset(identifier, isDescending());
   }
 
+  @Override
   public SelectQuery withQuerySegmentSpec(QuerySegmentSpec querySegmentSpec)
   {
-    return new SelectQuery(
-        getDataSource(),
-        querySegmentSpec,
-        isDescending(),
-        dimFilter,
-        granularity,
-        dimensions,
-        metrics,
-        pagingSpec,
-        getContext()
-    );
+    return Druids.SelectQueryBuilder.copy(this).intervals(querySegmentSpec).build();
   }
 
   @Override
   public Query<Result<SelectResultValue>> withDataSource(DataSource dataSource)
   {
-    return new SelectQuery(
-        dataSource,
-        getQuerySegmentSpec(),
-        isDescending(),
-        dimFilter,
-        granularity,
-        dimensions,
-        metrics,
-        pagingSpec,
-        getContext()
-    );
+    return Druids.SelectQueryBuilder.copy(this).dataSource(dataSource).build();
   }
 
+  @Override
   public SelectQuery withOverriddenContext(Map<String, Object> contextOverrides)
   {
-    return new SelectQuery(
-        getDataSource(),
-        getQuerySegmentSpec(),
-        isDescending(),
-        dimFilter,
-        granularity,
-        dimensions,
-        metrics,
-        pagingSpec,
-        computeOverridenContext(contextOverrides)
-    );
+    Map<String, Object> newContext = computeOverriddenContext(getContext(), contextOverrides);
+    return Druids.SelectQueryBuilder.copy(this).context(newContext).build();
   }
 
   public SelectQuery withPagingSpec(PagingSpec pagingSpec)
   {
-    return new SelectQuery(
-        getDataSource(),
-        getQuerySegmentSpec(),
-        isDescending(),
-        dimFilter,
-        granularity,
-        dimensions,
-        metrics,
-        pagingSpec,
-        getContext()
-    );
+    return Druids.SelectQueryBuilder.copy(this).pagingSpec(pagingSpec).build();
   }
 
   public SelectQuery withDimFilter(DimFilter dimFilter)
   {
-    return new SelectQuery(
-        getDataSource(),
-        getQuerySegmentSpec(),
-        isDescending(),
-        dimFilter,
-        granularity,
-        dimensions,
-        metrics,
-        pagingSpec,
-        getContext()
-    );
+    return Druids.SelectQueryBuilder.copy(this).filters(dimFilter).build();
   }
 
   @Override
   public String toString()
   {
     return "SelectQuery{" +
-           "dataSource='" + getDataSource() + '\'' +
-           ", querySegmentSpec=" + getQuerySegmentSpec() +
-           ", descending=" + isDescending() +
-           ", dimFilter=" + dimFilter +
-           ", granularity=" + granularity +
-           ", dimensions=" + dimensions +
-           ", metrics=" + metrics +
-           ", pagingSpec=" + pagingSpec +
-           '}';
+        "dataSource='" + getDataSource() + '\'' +
+        ", querySegmentSpec=" + getQuerySegmentSpec() +
+        ", descending=" + isDescending() +
+        ", dimFilter=" + dimFilter +
+        ", granularity=" + granularity +
+        ", dimensions=" + dimensions +
+        ", metrics=" + metrics +
+        ", virtualColumns=" + virtualColumns +
+        ", pagingSpec=" + pagingSpec +
+        '}';
   }
 
   @Override
@@ -239,19 +205,22 @@ public class SelectQuery extends BaseQuery<Result<SelectResultValue>>
 
     SelectQuery that = (SelectQuery) o;
 
-    if (dimFilter != null ? !dimFilter.equals(that.dimFilter) : that.dimFilter != null) {
+    if (!Objects.equals(dimFilter, that.dimFilter)) {
       return false;
     }
-    if (dimensions != null ? !dimensions.equals(that.dimensions) : that.dimensions != null) {
+    if (!Objects.equals(granularity, that.granularity)) {
       return false;
     }
-    if (granularity != null ? !granularity.equals(that.granularity) : that.granularity != null) {
+    if (!Objects.equals(dimensions, that.dimensions)) {
       return false;
     }
-    if (metrics != null ? !metrics.equals(that.metrics) : that.metrics != null) {
+    if (!Objects.equals(metrics, that.metrics)) {
       return false;
     }
-    if (pagingSpec != null ? !pagingSpec.equals(that.pagingSpec) : that.pagingSpec != null) {
+    if (!Objects.equals(virtualColumns, that.virtualColumns)) {
+      return false;
+    }
+    if (!Objects.equals(pagingSpec, that.pagingSpec)) {
       return false;
     }
 
@@ -266,6 +235,7 @@ public class SelectQuery extends BaseQuery<Result<SelectResultValue>>
     result = 31 * result + (granularity != null ? granularity.hashCode() : 0);
     result = 31 * result + (dimensions != null ? dimensions.hashCode() : 0);
     result = 31 * result + (metrics != null ? metrics.hashCode() : 0);
+    result = 31 * result + (virtualColumns != null ? virtualColumns.hashCode() : 0);
     result = 31 * result + (pagingSpec != null ? pagingSpec.hashCode() : 0);
     return result;
   }

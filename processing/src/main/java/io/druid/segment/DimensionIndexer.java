@@ -19,14 +19,15 @@
 
 package io.druid.segment;
 
-import com.metamx.collections.bitmap.BitmapFactory;
-import com.metamx.collections.bitmap.MutableBitmap;
+import io.druid.collections.bitmap.BitmapFactory;
+import io.druid.collections.bitmap.MutableBitmap;
 import io.druid.query.dimension.DimensionSpec;
-import io.druid.query.filter.DruidPredicateFactory;
-import io.druid.query.filter.ValueMatcher;
+import io.druid.segment.column.ValueType;
 import io.druid.segment.data.Indexed;
 import io.druid.segment.incremental.IncrementalIndex;
-import io.druid.segment.incremental.IncrementalIndexStorageAdapter;
+import io.druid.segment.incremental.TimeAndDimsHolder;
+
+import javax.annotation.Nullable;
 
 /**
  * Processing related interface
@@ -70,9 +71,9 @@ import io.druid.segment.incremental.IncrementalIndexStorageAdapter;
  * - getSortedEncodedValueFromUnsorted()
  * - getUnsortedEncodedValueFromSorted()
  * - getSortedIndexedValues()
- * - convertUnsortedEncodedArrayToSortedEncodedArray()
+ * - convertUnsortedEncodedKeyComponentToSortedEncodedKeyComponent()
  *
- * calling processRowValsToUnsortedEncodedArray() afterwards can invalidate previously read sorted encoding values
+ * calling processRowValsToUnsortedEncodedKeyComponent() afterwards can invalidate previously read sorted encoding values
  * (i.e., new values could be added that are inserted between existing values in the ordering).
  *
  *
@@ -80,7 +81,7 @@ import io.druid.segment.incremental.IncrementalIndexStorageAdapter;
  * --------------------
  * Each DimensionIndexer exists within the context of a single IncrementalIndex. Before IndexMerger.persist() is
  * called on an IncrementalIndex, any associated DimensionIndexers should allow multiple threads to add data to the
- * indexer via processRowValsToUnsortedEncodedArray() and allow multiple threads to read data via methods that only
+ * indexer via processRowValsToUnsortedEncodedKeyComponent() and allow multiple threads to read data via methods that only
  * deal with unsorted encodings.
  *
  * As mentioned in the "Sorting and Ordering" section, writes and calls to the sorted encoding
@@ -99,12 +100,22 @@ import io.druid.segment.incremental.IncrementalIndexStorageAdapter;
  * For example, in the RealtimePlumber and IndexGeneratorJob, the thread that performs index persist is started
  * by the same thread that handles the row adds on an index, ensuring the adds are visible to the persist thread.
  *
- * @param <EncodedType> class of the encoded values
- * @param <ActualType> class of the actual values
+ * @param <EncodedType> class of a single encoded value
+ * @param <EncodedKeyComponentType> A row key contains a component for each dimension, this param specifies the
+ *                                 class of this dimension's key component. A column type that supports multivalue rows
+ *                                 should use an array type (e.g., Strings would use int[]). Column types without
+ *                                 multivalue row support should use single objects (e.g., Long, Float).
+ * @param <ActualType> class of a single actual value
  *
  */
-public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, EncodedTypeArray, ActualType extends Comparable<ActualType>>
+public interface DimensionIndexer
+    <EncodedType extends Comparable<EncodedType>, EncodedKeyComponentType, ActualType extends Comparable<ActualType>>
 {
+  /**
+   * @return The ValueType corresponding to this dimension indexer's ActualType.
+   */
+  ValueType getValueType();
+
   /**
    * Given a single row value or list of row values (for multi-valued dimensions), update any internal data structures
    * with the ingested values and return the row values as an array to be used within a TimeAndDims key.
@@ -119,7 +130,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    *
    * @return An array containing an encoded representation of the input row value.
    */
-  public EncodedTypeArray processRowValsToUnsortedEncodedArray(Object dimValues);
+  EncodedKeyComponentType processRowValsToUnsortedEncodedKeyComponent(Object dimValues);
 
 
   /**
@@ -132,7 +143,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    * @param unsortedIntermediateValue value to convert
    * @return converted value
    */
-  public EncodedType getSortedEncodedValueFromUnsorted(EncodedType unsortedIntermediateValue);
+  EncodedType getSortedEncodedValueFromUnsorted(EncodedType unsortedIntermediateValue);
 
 
   /**
@@ -145,7 +156,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    * @param sortedIntermediateValue value to convert
    * @return converted value
    */
-  public EncodedType getUnsortedEncodedValueFromSorted(EncodedType sortedIntermediateValue);
+  EncodedType getUnsortedEncodedValueFromSorted(EncodedType sortedIntermediateValue);
 
 
   /**
@@ -159,7 +170,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    *
    * @return Sorted index of actual values
    */
-  public Indexed<ActualType> getSortedIndexedValues();
+  Indexed<ActualType> getSortedIndexedValues();
 
 
   /**
@@ -177,7 +188,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    *
    * @return min value
    */
-  public ActualType getMinValue();
+  ActualType getMinValue();
 
 
   /**
@@ -185,7 +196,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    *
    * @return max value
    */
-  public ActualType getMaxValue();
+  ActualType getMaxValue();
 
 
   /**
@@ -193,29 +204,31 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    *
    * @return value cardinality
    */
-  public int getCardinality();
+  int getCardinality();
 
 
   /**
-   * Return an object used to read rows from a StorageAdapter's Cursor.
-   *
-   * e.g. String -> DimensionSelector
-   *      Long   -> LongColumnSelector
-   *      Float  -> FloatColumnSelector
-   *
-   * See StringDimensionIndexer.makeColumnValueSelector() for a reference implementation.
+   * Return an object used to read values from this indexer's column as Strings.
    *
    * @param spec Specifies the output name of a dimension and any extraction functions to be applied.
    * @param currEntry Provides access to the current TimeAndDims object in the Cursor
    * @param desc Descriptor object for this dimension within an IncrementalIndex
    * @return A new object that reads rows from currEntry
    */
-  public Object makeColumnValueSelector(
+  DimensionSelector makeDimensionSelector(
       DimensionSpec spec,
-      IncrementalIndexStorageAdapter.EntryHolder currEntry,
+      TimeAndDimsHolder currEntry,
       IncrementalIndex.DimensionDesc desc
   );
 
+  /**
+   * Return an object used to read values from this indexer's column.
+   *
+   * @param currEntry Provides access to the current TimeAndDims object in the Cursor
+   * @param desc Descriptor object for this dimension within an IncrementalIndex
+   * @return A new object that reads rows from currEntry
+   */
+  ColumnValueSelector<?> makeColumnValueSelector(TimeAndDimsHolder currEntry, IncrementalIndex.DimensionDesc desc);
 
   /**
    * Compares the row values for this DimensionIndexer's dimension from a TimeAndDims key.
@@ -233,13 +246,13 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    * them to their actual type (e.g., performing a dictionary lookup for a dict-encoded String dimension),
    * and comparing the actual values until a difference is found.
    *
-   * Refer to StringDimensionIndexer.compareUnsortedEncodedArrays() for a reference implementation.
+   * Refer to StringDimensionIndexer.compareUnsortedEncodedKeyComponents() for a reference implementation.
    *
    * @param lhs dimension value array from a TimeAndDims key
    * @param rhs dimension value array from a TimeAndDims key
    * @return comparison of the two arrays
    */
-  public int compareUnsortedEncodedArrays(EncodedTypeArray lhs, EncodedTypeArray rhs);
+  int compareUnsortedEncodedKeyComponents(@Nullable EncodedKeyComponentType lhs, @Nullable EncodedKeyComponentType rhs);
 
 
   /**
@@ -249,7 +262,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    * @param rhs dimension value array from a TimeAndDims key
    * @return true if the two arrays are equal
    */
-  public boolean checkUnsortedEncodedArraysEqual(EncodedTypeArray lhs, EncodedTypeArray rhs);
+  boolean checkUnsortedEncodedKeyComponentsEqual(@Nullable EncodedKeyComponentType lhs, @Nullable EncodedKeyComponentType rhs);
 
 
   /**
@@ -257,33 +270,35 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    * @param key dimension value array from a TimeAndDims key
    * @return hashcode of the array
    */
-  public int getUnsortedEncodedArrayHashCode(EncodedTypeArray key);
+  int getUnsortedEncodedKeyComponentHashCode(@Nullable EncodedKeyComponentType key);
 
-  public static final boolean LIST = true;
-  public static final boolean ARRAY = false;
+  boolean LIST = true;
+  boolean ARRAY = false;
 
   /**
-   * Given a row value array from a TimeAndDims key, as described in the documentation for compareUnsortedEncodedArrays(),
-   * convert the unsorted encoded values to a list or array of actual values.
+   * Given a row value array from a TimeAndDims key, as described in the documentation for
+   * compareUnsortedEncodedKeyComponents(), convert the unsorted encoded values to a list or array of actual values.
    *
    * If the key has one element, this method should return a single Object instead of an array or list, ignoring
    * the asList parameter.
    *
    * @param key dimension value array from a TimeAndDims key
    * @param asList if true, return an array; if false, return a list
-   * @return single value, array, or list containing the actual values corresponding to the encoded values in the input array
+   * @return single value, array, or list containing the actual values corresponding to the encoded values
+   *         in the input array
    */
-  public Object convertUnsortedEncodedArrayToActualArrayOrList(EncodedTypeArray key, boolean asList);
+  Object convertUnsortedEncodedKeyComponentToActualArrayOrList(EncodedKeyComponentType key, boolean asList);
 
 
   /**
-   * Given a row value array from a TimeAndDims key, as described in the documentation for compareUnsortedEncodedArrays(),
-   * convert the unsorted encoded values to an array of sorted encoded values (i.e., sorted by their corresponding actual values)
+   * Given a row value array from a TimeAndDims key, as described in the documentation for
+   * compareUnsortedEncodedKeyComponents(), convert the unsorted encoded values to an array of sorted encoded values
+   * (i.e., sorted by their corresponding actual values)
    *
    * @param key dimension value array from a TimeAndDims key
    * @return array containing the sorted encoded values corresponding to the unsorted encoded values in the input array
    */
-  public EncodedTypeArray convertUnsortedEncodedArrayToSortedEncodedArray(EncodedTypeArray key);
+  EncodedKeyComponentType convertUnsortedEncodedKeyComponentToSortedEncodedKeyComponent(EncodedKeyComponentType key);
 
 
   /**
@@ -297,7 +312,7 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    * For example, if key is an int[] array with values [1,3,4] for a dictionary-encoded String dimension,
    * and rowNum is 27, this function would set bit 27 in bitmapIndexes[1], bitmapIndexes[3], and bitmapIndexes[4]
    *
-   * See StringDimensionIndexer.fillBitmapsFromUnsortedEncodedArray() for a reference implementation.
+   * See StringDimensionIndexer.fillBitmapsFromUnsortedEncodedKeyComponent() for a reference implementation.
    *
    * If a dimension type does not support bitmap indexes, this function will not be called
    * and can be left unimplemented.
@@ -307,48 +322,10 @@ public interface DimensionIndexer<EncodedType extends Comparable<EncodedType>, E
    * @param bitmapIndexes array of bitmaps, indexed by integer dimension value
    * @param factory bitmap factory
    */
-  public void fillBitmapsFromUnsortedEncodedArray(EncodedTypeArray key, int rowNum, MutableBitmap[] bitmapIndexes, BitmapFactory factory);
-
-
-  /**
-   * Return a ValueMatcher that accepts an EntryHolder containing the current TimeAndDims key and the array index of this
-   * indexer's dimension within the TimeAndDims key.
-   *
-   * The implementer should read the dimension array Object from the TimeAndDims key and cast it to the appropriate
-   * type, as described in the documentation for compareUnsortedEncodedArrays().
-   *
-   * The returned ValueMatcher should match the dimension values against matchValue.
-   *
-   * See StringDimensionIndexer for a reference implementation.
-   *
-   * @param matchValue value to match on
-   * @param holder holds the current TimeAndDims key during row iteration
-   * @param dimIndex the array index of this indexer's dimension within the TimeAndDims key
-   * @return A ValueMatcher that matches a dimension value array from a TimeAndDims key against "matchValue"
-   */
-  public ValueMatcher makeIndexingValueMatcher(Comparable matchValue, IncrementalIndexStorageAdapter.EntryHolder holder, int dimIndex);
-
-
-  /**
-   * Return a ValueMatcher that accepts an EntryHolder containing the current TimeAndDims key and the array index of this
-   * indexer's dimension within the TimeAndDims key.
-   *
-   * The implementer should read the dimension array Object from the TimeAndDims key and cast it to the appropriate
-   * type, as described in the documentation for compareUnsortedEncodedArrays().
-   *
-   * Based on the type of the indexer, this method should get a predicate of the same type from the supplied
-   * predicateFactory.
-   *
-   * For example, a StringDimensionIndexer would call predicateFactory.makeStringPredicate().
-   *
-   * The returned ValueMatcher should apply the generated predicate to the dimension values.
-   *
-   * See StringDimensionIndexer for a reference implementation.
-   *
-   * @param predicateFactory Factory object that can generate predicates for each supported dimension type
-   * @param holder holds the current TimeAndDims key during row iteration
-   * @param dimIndex the array index of this indexer's dimension within the TimeAndDims key
-   * @return A ValueMatcher that applies a predicate from the predicateFactory to the dimension values in the TimeAndDim keys
-   */
-  public ValueMatcher makeIndexingValueMatcher(DruidPredicateFactory predicateFactory, IncrementalIndexStorageAdapter.EntryHolder holder, int dimIndex);
+  void fillBitmapsFromUnsortedEncodedKeyComponent(
+      EncodedKeyComponentType key,
+      int rowNum,
+      MutableBitmap[] bitmapIndexes,
+      BitmapFactory factory
+  );
 }

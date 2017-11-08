@@ -1,22 +1,20 @@
 /*
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
  *
- *  Licensed to Metamarkets Group Inc. (Metamarkets) under one
- *  or more contributor license agreements. See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership. Metamarkets licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License. You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied. See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
- * /
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
 package io.druid.server.lookup.jdbc;
@@ -26,6 +24,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.metadata.MetadataStorageConnectorConfig;
 import io.druid.server.lookup.DataFetcher;
@@ -77,19 +76,19 @@ public class JdbcDataFetcher implements DataFetcher<String, String>
     this.keyColumn = Preconditions.checkNotNull(keyColumn, "keyColumn");
     this.valueColumn = Preconditions.checkNotNull(valueColumn, "valueColumn");
 
-    this.fetchAllQuery = String.format(
+    this.fetchAllQuery = StringUtils.format(
         "SELECT %s, %s FROM %s",
         this.keyColumn,
         this.valueColumn,
         this.table
     );
-    this.fetchQuery = String.format(
+    this.fetchQuery = StringUtils.format(
         "SELECT %s FROM %s WHERE %s = :val",
         this.valueColumn,
         this.table,
         this.keyColumn
     );
-    this.reverseFetchQuery = String.format(
+    this.reverseFetchQuery = StringUtils.format(
         "SELECT %s FROM %s WHERE %s = :val",
         this.keyColumn,
         this.table,
@@ -106,22 +105,12 @@ public class JdbcDataFetcher implements DataFetcher<String, String>
   @Override
   public Iterable<Map.Entry<String, String>> fetchAll()
   {
-    return inReadOnlyTransaction(new TransactionCallback<List<Map.Entry<String, String>>>()
-                                 {
-                                   @Override
-                                   public List<Map.Entry<String, String>> inTransaction(
-                                       Handle handle,
-                                       TransactionStatus status
-                                   ) throws Exception
-                                   {
-                                     return handle.createQuery(fetchAllQuery)
-                                                  .setFetchSize(streamingFetchSize)
-                                                  .map(new KeyValueResultSetMapper(keyColumn, valueColumn))
-                                                  .list();
-                                   }
-
-                                 }
-    );
+    return inReadOnlyTransaction((handle, status) -> {
+      return handle.createQuery(fetchAllQuery)
+                   .setFetchSize(streamingFetchSize)
+                   .map(new KeyValueResultSetMapper(keyColumn, valueColumn))
+                   .list();
+    });
   }
 
   @Override
@@ -193,6 +182,16 @@ public class JdbcDataFetcher implements DataFetcher<String, String>
     }
     return valueColumn.equals(that.valueColumn);
 
+  }
+
+  @Override
+  public String toString()
+  {
+    return "JdbcDataFetcher{" +
+           "table='" + table + '\'' +
+           ", keyColumn='" + keyColumn + '\'' +
+           ", valueColumn='" + valueColumn + '\'' +
+           '}';
   }
 
   private DBI getDbi()

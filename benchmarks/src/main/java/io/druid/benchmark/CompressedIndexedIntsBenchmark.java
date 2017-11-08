@@ -76,7 +76,9 @@ public class CompressedIndexedIntsBenchmark
         )
     );
     this.compressed = CompressedVSizeIntsIndexedSupplier.fromByteBuffer(
-        bufferCompressed, ByteOrder.nativeOrder()
+        bufferCompressed,
+        ByteOrder.nativeOrder(),
+        null
     ).get();
 
     final ByteBuffer bufferUncompressed = serialize(
@@ -93,7 +95,7 @@ public class CompressedIndexedIntsBenchmark
       int rowToAccess = rand.nextInt(vals.length);
       // Skip already selected rows if any
       while (filter.get(rowToAccess)) {
-        rowToAccess = (rowToAccess+1) % vals.length;
+        rowToAccess = (rowToAccess + 1) % vals.length;
       }
       filter.set(rowToAccess);
     }

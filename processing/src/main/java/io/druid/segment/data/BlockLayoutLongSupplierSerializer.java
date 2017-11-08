@@ -25,6 +25,7 @@ import com.google.common.io.CountingOutputStream;
 import com.google.common.primitives.Ints;
 import io.druid.collections.ResourceHolder;
 import io.druid.collections.StupidResourceHolder;
+import io.druid.java.util.common.io.smoosh.FileSmoosher;
 import io.druid.segment.CompressedPools;
 
 import java.io.IOException;
@@ -33,7 +34,6 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
 
 public class BlockLayoutLongSupplierSerializer implements LongSupplierSerializer
@@ -61,7 +61,7 @@ public class BlockLayoutLongSupplierSerializer implements LongSupplierSerializer
   {
     this.ioPeon = ioPeon;
     this.sizePer = writer.getBlockSize(CompressedPools.BUFFER_SIZE);
-    this.flattener = new GenericIndexedWriter<ResourceHolder<ByteBuffer>>(
+    this.flattener = new GenericIndexedWriter<>(
         ioPeon,
         filenameBase,
         VSizeCompressedObjectStrategy.getBufferForOrder(
@@ -145,13 +145,11 @@ public class BlockLayoutLongSupplierSerializer implements LongSupplierSerializer
   }
 
   @Override
-  public void writeToChannel(WritableByteChannel channel) throws IOException
+  public void writeToChannel(WritableByteChannel channel, FileSmoosher smoosher) throws IOException
   {
-    try (InputStream meta = ioPeon.makeInputStream(metaFile);
-         InputStream input = flattener.combineStreams().getInput()) {
+    try (InputStream meta = ioPeon.makeInputStream(metaFile)) {
       ByteStreams.copy(Channels.newChannel(meta), channel);
-      final ReadableByteChannel from = Channels.newChannel(input);
-      ByteStreams.copy(from, channel);
+      flattener.writeToChannel(channel, smoosher);
     }
   }
 }

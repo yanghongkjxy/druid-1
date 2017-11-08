@@ -19,63 +19,46 @@
 
 package io.druid.collections;
 
-import com.google.common.base.Preconditions;
-import com.google.common.base.Supplier;
+import java.util.List;
 
-import io.druid.java.util.common.logger.Logger;
-
-import java.io.Closeable;
-import java.io.IOException;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
-
-/**
- * Pool that pre-generates objects up to a limit, then permits possibly-blocking "take" operations.
- */
-public class BlockingPool<T>
+public interface BlockingPool<T>
 {
-  private static final Logger log = new Logger(BlockingPool.class);
-
-  private final BlockingQueue<T> objects;
-
-  public BlockingPool(
-      Supplier<T> generator,
-      int limit
-  )
-  {
-    this.objects = limit > 0 ? new ArrayBlockingQueue<T>(limit) : null;
-
-    for (int i = 0; i < limit; i++) {
-      objects.add(generator.get());
-    }
-  }
+  int maxSize();
 
   /**
-   * Take a resource from the pool.
+   * Take a resource from the pool, waiting up to the
+   * specified wait time if necessary for an element to become available.
    *
-   * @param timeout maximum time to wait for a resource, in milliseconds. Negative means do not use a timeout.
+   * @param timeoutMs maximum time to wait for a resource, in milliseconds.
    *
    * @return a resource, or null if the timeout was reached
-   *
-   * @throws InterruptedException if interrupted while waiting for a resource to become available
    */
-  public ReferenceCountingResourceHolder<T> take(final long timeout) throws InterruptedException
-  {
-    Preconditions.checkState(objects != null, "Pool was initialized with limit = 0, there are no objects to take.");
-    final T theObject = timeout >= 0 ? objects.poll(timeout, TimeUnit.MILLISECONDS) : objects.take();
-    return theObject == null ? null : new ReferenceCountingResourceHolder<>(
-        theObject,
-        new Closeable()
-        {
-          @Override
-          public void close() throws IOException
-          {
-            if (!objects.offer(theObject)) {
-              log.error("WTF?! Queue offer failed, uh oh...");
-            }
-          }
-        }
-    );
-  }
+  ReferenceCountingResourceHolder<T> take(long timeoutMs);
+
+  /**
+   * Take a resource from the pool, waiting if necessary until an element becomes available.
+   *
+   * @return a resource
+   */
+  ReferenceCountingResourceHolder<T> take();
+
+  /**
+   * Take resources from the pool, waiting up to the
+   * specified wait time if necessary for elements of the given number to become available.
+   *
+   * @param elementNum number of resources to take
+   * @param timeoutMs  maximum time to wait for resources, in milliseconds.
+   *
+   * @return a resource, or null if the timeout was reached
+   */
+  ReferenceCountingResourceHolder<List<T>> takeBatch(int elementNum, long timeoutMs);
+
+  /**
+   * Take resources from the pool, waiting if necessary until the elements of the given number become available.
+   *
+   * @param elementNum number of resources to take
+   *
+   * @return a resource
+   */
+  ReferenceCountingResourceHolder<List<T>> takeBatch(int elementNum);
 }

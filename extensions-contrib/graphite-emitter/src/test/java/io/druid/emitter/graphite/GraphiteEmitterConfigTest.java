@@ -1,3 +1,22 @@
+/*
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 package io.druid.emitter.graphite;
 
 import com.fasterxml.jackson.databind.InjectableValues;
@@ -30,9 +49,11 @@ public class GraphiteEmitterConfigTest
         "hostname",
         8080,
         1000,
+        GraphiteEmitterConfig.PICKLE_PROTOCOL,
         1000L,
         100,
-        new SendAllGraphiteEventConverter("prefix", true, true),
+        new SendAllGraphiteEventConverter("prefix", true, true, false),
+        Collections.EMPTY_LIST,
         Collections.EMPTY_LIST,
         null,
         null
@@ -47,7 +68,12 @@ public class GraphiteEmitterConfigTest
   @Test
   public void testSerDeserDruidToGraphiteEventConverter() throws IOException
   {
-    SendAllGraphiteEventConverter sendAllGraphiteEventConverter = new SendAllGraphiteEventConverter("prefix", true, true);
+    SendAllGraphiteEventConverter sendAllGraphiteEventConverter = new SendAllGraphiteEventConverter(
+        "prefix",
+        true,
+        true,
+        false
+    );
     String noopGraphiteEventConverterString = mapper.writeValueAsString(sendAllGraphiteEventConverter);
     DruidToGraphiteEventConverter druidToGraphiteEventConverter = mapper.reader(DruidToGraphiteEventConverter.class)
                                                                         .readValue(noopGraphiteEventConverterString);
@@ -57,6 +83,7 @@ public class GraphiteEmitterConfigTest
         "prefix",
         true,
         true,
+        false,
         "",
         new DefaultObjectMapper()
     );

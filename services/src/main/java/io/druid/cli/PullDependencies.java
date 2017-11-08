@@ -24,7 +24,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.inject.Inject;
-
 import io.airlift.airline.Command;
 import io.airlift.airline.Option;
 import io.druid.guice.ExtensionsConfig;
@@ -136,8 +135,7 @@ public class PullDependencies implements Runnable
   );
 
   private static final List<String> DEFAULT_REMOTE_REPOSITORIES = ImmutableList.of(
-      "https://repo1.maven.org/maven2/",
-      "https://metamx.artifactoryonline.com/metamx/pub-libs-releases-local"
+      "https://repo1.maven.org/maven2/"
   );
 
   private TeslaAether aether;
@@ -176,11 +174,11 @@ public class PullDependencies implements Runnable
       title = "A local repository that Maven will use to put downloaded files. Then pull-deps will lay these files out into the extensions directory as needed.",
       required = false
   )
-  public String localRepository = String.format("%s/%s", System.getProperty("user.home"), ".m2/repository");
+  public String localRepository = StringUtils.format("%s/%s", System.getProperty("user.home"), ".m2/repository");
 
   @Option(
       name = {"-r", "--remoteRepository"},
-      title = "Add a remote repository. Unless --no-default-remote-repositories is provided, these will be used after https://repo1.maven.org/maven2/ and https://metamx.artifactoryonline.com/metamx/pub-libs-releases-local",
+      title = "Add a remote repository. Unless --no-default-remote-repositories is provided, these will be used after https://repo1.maven.org/maven2/",
       required = false
   )
   List<String> remoteRepositories = Lists.newArrayList();
@@ -219,19 +217,18 @@ public class PullDependencies implements Runnable
     final File extensionsDir = new File(extensionsConfig.getDirectory());
     final File hadoopDependenciesDir = new File(extensionsConfig.getHadoopDependenciesDir());
 
-    if (clean) {
-      try {
+    try {
+      if (clean) {
         FileUtils.deleteDirectory(extensionsDir);
         FileUtils.deleteDirectory(hadoopDependenciesDir);
       }
-      catch (IOException e) {
-        log.error("Unable to clear extension directory at [%s]", extensionsConfig.getDirectory());
-        throw Throwables.propagate(e);
-      }
+      FileUtils.forceMkdir(extensionsDir);
+      FileUtils.forceMkdir(hadoopDependenciesDir);
     }
-
-    createRootExtensionsDirectory(extensionsDir);
-    createRootExtensionsDirectory(hadoopDependenciesDir);
+    catch (IOException e) {
+      log.error(e, "Unable to clear or create extension directory at [%s]", extensionsDir);
+      throw Throwables.propagate(e);
+    }
 
     log.info(
         "Start pull-deps with local repository [%s] and remote repositories [%s]",
@@ -241,7 +238,8 @@ public class PullDependencies implements Runnable
 
     try {
       log.info("Start downloading dependencies for extension coordinates: [%s]", coordinates);
-      for (final String coordinate : coordinates) {
+      for (String coordinate : coordinates) {
+        coordinate = coordinate.trim();
         final Artifact versionedArtifact = getArtifact(coordinate);
 
         File currExtensionDir = new File(extensionsDir, versionedArtifact.getArtifactId());
@@ -314,7 +312,7 @@ public class PullDependencies implements Runnable
               {
                 String scope = node.getDependency().getScope();
                 if (scope != null) {
-                  scope = scope.toLowerCase();
+                  scope = StringUtils.toLowerCase(scope);
                   if (scope.equals("provided")) {
                     return false;
                   }
@@ -442,8 +440,9 @@ public class PullDependencies implements Runnable
                 {
 
                 }
-              }
-              , false, StringUtils.UTF8_STRING
+              },
+              false,
+              StringUtils.UTF8_STRING
           )
       );
       return new DefaultTeslaAether(
@@ -460,22 +459,6 @@ public class PullDependencies implements Runnable
     }
   }
 
-  private void createRootExtensionsDirectory(File atLocation)
-  {
-    if (atLocation.isDirectory()) {
-      log.info("Root extension directory [%s] already exists, skip creating");
-      return;
-    }
-    if (!atLocation.mkdirs()) {
-      throw new ISE(
-          String.format(
-              "Unable to create extensions directory at [%s]",
-              atLocation.getAbsolutePath()
-          )
-      );
-    }
-  }
-
   /**
    * Create the extension directory for a specific maven coordinate.
    * The name of this directory should be the artifactId in the coordinate
@@ -489,11 +472,9 @@ public class PullDependencies implements Runnable
 
     if (!atLocation.mkdir()) {
       throw new ISE(
-          String.format(
-              "Unable to create directory at [%s] for coordinate [%s]",
-              atLocation.getAbsolutePath(),
-              coordinate
-          )
+          "Unable to create directory at [%s] for coordinate [%s]",
+          atLocation.getAbsolutePath(),
+          coordinate
       );
     }
   }

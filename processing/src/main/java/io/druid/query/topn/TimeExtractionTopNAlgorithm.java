@@ -21,6 +21,7 @@ package io.druid.query.topn;
 
 import com.google.common.collect.Maps;
 import io.druid.query.aggregation.Aggregator;
+import io.druid.query.ColumnSelectorPlus;
 import io.druid.segment.Capabilities;
 import io.druid.segment.Cursor;
 import io.druid.segment.DimensionSelector;
@@ -40,10 +41,10 @@ public class TimeExtractionTopNAlgorithm extends BaseTopNAlgorithm<int[], Map<St
 
 
   @Override
-  public TopNParams makeInitParams(DimensionSelector dimSelector, Cursor cursor)
+  public TopNParams makeInitParams(ColumnSelectorPlus selectorPlus, Cursor cursor)
   {
     return new TopNParams(
-        dimSelector,
+        selectorPlus,
         cursor,
         Integer.MAX_VALUE
     );
@@ -68,13 +69,18 @@ public class TimeExtractionTopNAlgorithm extends BaseTopNAlgorithm<int[], Map<St
   }
 
   @Override
-  protected void scanAndAggregate(
+  protected long scanAndAggregate(
       TopNParams params, int[] dimValSelector, Map<String, Aggregator[]> aggregatesStore, int numProcessed
   )
   {
+    if (params.getCardinality() < 0) {
+      throw new UnsupportedOperationException("Cannot operate on a dimension with unknown cardinality");
+    }
+
     final Cursor cursor = params.getCursor();
     final DimensionSelector dimSelector = params.getDimSelector();
 
+    long processedRows = 0;
     while (!cursor.isDone()) {
       final String key = dimSelector.lookupName(dimSelector.getRow().get(0));
 
@@ -89,7 +95,9 @@ public class TimeExtractionTopNAlgorithm extends BaseTopNAlgorithm<int[], Map<St
       }
 
       cursor.advance();
+      processedRows++;
     }
+    return processedRows;
   }
 
   @Override
@@ -102,7 +110,7 @@ public class TimeExtractionTopNAlgorithm extends BaseTopNAlgorithm<int[], Map<St
   {
     for (Map.Entry<String, Aggregator[]> entry : aggregatesStore.entrySet()) {
       Aggregator[] aggs = entry.getValue();
-      if (aggs != null && aggs.length > 0) {
+      if (aggs != null) {
         Object[] vals = new Object[aggs.length];
         for (int i = 0; i < aggs.length; i++) {
           vals[i] = aggs[i].get();

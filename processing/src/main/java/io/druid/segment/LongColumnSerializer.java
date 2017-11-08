@@ -19,6 +19,8 @@
 
 package io.druid.segment;
 
+import io.druid.java.util.common.StringUtils;
+import io.druid.java.util.common.io.smoosh.FileSmoosher;
 import io.druid.segment.data.CompressedObjectStrategy;
 import io.druid.segment.data.CompressionFactory;
 import io.druid.segment.data.IOPeon;
@@ -28,6 +30,9 @@ import java.io.IOException;
 import java.nio.ByteOrder;
 import java.nio.channels.WritableByteChannel;
 
+/**
+ * Unsafe for concurrent use from multiple threads.
+ */
 public class LongColumnSerializer implements GenericColumnSerializer
 {
   public static LongColumnSerializer create(
@@ -67,7 +72,7 @@ public class LongColumnSerializer implements GenericColumnSerializer
   {
     writer = CompressionFactory.getLongSerializer(
         ioPeon,
-        String.format("%s.long_column", filenameBase),
+        StringUtils.format("%s.long_column", filenameBase),
         byteOrder,
         encoding,
         compression
@@ -95,9 +100,9 @@ public class LongColumnSerializer implements GenericColumnSerializer
   }
 
   @Override
-  public void writeToChannel(WritableByteChannel channel) throws IOException
+  public void writeToChannel(WritableByteChannel channel, FileSmoosher smoosher) throws IOException
   {
-    writer.writeToChannel(channel);
+    writer.writeToChannel(channel, smoosher);
   }
 
 }

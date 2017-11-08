@@ -29,7 +29,6 @@ import io.druid.data.input.impl.DimensionsSpec;
 import io.druid.data.input.impl.InputRowParser;
 import io.druid.data.input.impl.TimeAndDimsParseSpec;
 import io.druid.data.input.impl.TimestampSpec;
-import io.druid.granularity.QueryGranularities;
 import io.druid.indexer.HadoopDruidIndexerConfig;
 import io.druid.indexer.HadoopIOConfig;
 import io.druid.indexer.HadoopIngestionSpec;
@@ -38,7 +37,9 @@ import io.druid.indexer.HadoopyShardSpec;
 import io.druid.indexer.IndexGeneratorJob;
 import io.druid.indexer.JobHelper;
 import io.druid.indexer.Jobby;
-import io.druid.java.util.common.Granularity;
+import io.druid.java.util.common.Intervals;
+import io.druid.java.util.common.StringUtils;
+import io.druid.java.util.common.granularity.Granularities;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.LongSumAggregatorFactory;
 import io.druid.query.aggregation.hyperloglog.HyperUniquesAggregatorFactory;
@@ -59,6 +60,7 @@ import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.orc.CompressionKind;
 import org.apache.orc.OrcFile;
 import org.apache.orc.TypeDescription;
+import org.apache.orc.Writer;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeComparator;
 import org.joda.time.Interval;
@@ -116,15 +118,17 @@ public class OrcIndexGeneratorJobTest
           "2014102212,i.example.com,963",
           "2014102212,j.example.com,333"
       );
-  private final Interval interval = new Interval("2014-10-22T00:00:00Z/P1D");
+  private final Interval interval = Intervals.of("2014-10-22T00:00:00Z/P1D");
   private File dataRoot;
   private File outputRoot;
-  private Integer[][][] shardInfoForEachSegment = new Integer[][][]{{
-      {0, 4},
-      {1, 4},
-      {2, 4},
-      {3, 4}
-  }};
+  private Integer[][][] shardInfoForEachSegment = new Integer[][][]{
+      {
+          {0, 4},
+          {1, 4},
+          {2, 4},
+          {3, 4}
+      }
+  };
   private final InputRowParser inputRowParser = new OrcHadoopInputRowParser(
       new TimeAndDimsParseSpec(
           new TimestampSpec("timestamp", "yyyyMMddHH", null),
@@ -141,7 +145,7 @@ public class OrcIndexGeneratorJobTest
         .addField("host", TypeDescription.createString())
         .addField("visited_num", TypeDescription.createInt());
     Configuration conf = new Configuration();
-    org.apache.orc.Writer writer = OrcFile.createWriter(
+    Writer writer = OrcFile.createWriter(
         new Path(outputFile.getPath()),
         OrcFile.writerOptions(conf)
             .setSchema(schema)
@@ -155,8 +159,18 @@ public class OrcIndexGeneratorJobTest
     for (int idx = 0; idx < data.size(); idx++) {
       String line = data.get(idx);
       String[] lineSplit = line.split(",");
-      ((BytesColumnVector) batch.cols[0]).setRef(idx, lineSplit[0].getBytes(), 0, lineSplit[0].length());
-      ((BytesColumnVector) batch.cols[1]).setRef(idx, lineSplit[1].getBytes(), 0, lineSplit[1].length());
+      ((BytesColumnVector) batch.cols[0]).setRef(
+          idx,
+          StringUtils.toUtf8(lineSplit[0]),
+          0,
+          lineSplit[0].length()
+      );
+      ((BytesColumnVector) batch.cols[1]).setRef(
+          idx,
+          StringUtils.toUtf8(lineSplit[1]),
+          0,
+          lineSplit[1].length()
+      );
       ((LongColumnVector) batch.cols[2]).vector[idx] = Long.parseLong(lineSplit[2]);
     }
     writer.addRowBatch(batch);
@@ -190,8 +204,9 @@ public class OrcIndexGeneratorJobTest
                 ),
                 aggs,
                 new UniformGranularitySpec(
-                    Granularity.DAY, QueryGranularities.NONE, ImmutableList.of(this.interval)
+                    Granularities.DAY, Granularities.NONE, ImmutableList.of(this.interval)
                 ),
+                null,
                 mapper
             ),
             new HadoopIOConfig(
@@ -217,7 +232,8 @@ public class OrcIndexGeneratorJobTest
                 true,
                 null,
                 false,
-                false
+                false,
+                null
             )
         )
     );
@@ -241,7 +257,7 @@ public class OrcIndexGeneratorJobTest
     for (DateTime currTime = interval.getStart(); currTime.isBefore(interval.getEnd()); currTime = currTime.plusDays(1)) {
       Integer[][] shardInfo = shardInfoForEachSegment[segmentNum++];
       File segmentOutputFolder = new File(
-          String.format(
+          StringUtils.format(
               "%s/%s/%s_%s/%s",
               config.getSchema().getIOConfig().getSegmentOutputPath(),
               config.getSchema().getDataSchema().getDataSource(),
@@ -290,8 +306,7 @@ public class OrcIndexGeneratorJobTest
         QueryableIndex index = HadoopDruidIndexerConfig.INDEX_IO.loadIndex(dir);
         QueryableIndexIndexableAdapter adapter = new QueryableIndexIndexableAdapter(index);
 
-        for(Rowboat row: adapter.getRows())
-        {
+        for (Rowboat row: adapter.getRows()) {
           Object[] metrics = row.getMetrics();
 
           rowCount++;
@@ -302,11 +317,11 @@ public class OrcIndexGeneratorJobTest
     }
   }
 
-  private Map<DateTime, List<HadoopyShardSpec>> loadShardSpecs(
+  private Map<Long, List<HadoopyShardSpec>> loadShardSpecs(
       Integer[][][] shardInfoForEachShard
   )
   {
-    Map<DateTime, List<HadoopyShardSpec>> shardSpecs = Maps.newTreeMap(DateTimeComparator.getInstance());
+    Map<Long, List<HadoopyShardSpec>> shardSpecs = Maps.newTreeMap(DateTimeComparator.getInstance());
     int shardCount = 0;
     int segmentNum = 0;
     for (Interval segmentGranularity : config.getSegmentGranularIntervals().get()) {
@@ -319,7 +334,7 @@ public class OrcIndexGeneratorJobTest
         actualSpecs.add(new HadoopyShardSpec(spec, shardCount++));
       }
 
-      shardSpecs.put(segmentGranularity.getStart(), actualSpecs);
+      shardSpecs.put(segmentGranularity.getStartMillis(), actualSpecs);
     }
 
     return shardSpecs;

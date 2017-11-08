@@ -28,19 +28,17 @@ import io.druid.data.input.impl.InputRowParser;
 import io.druid.data.input.impl.MapInputRowParser;
 import io.druid.data.input.impl.TimeAndDimsParseSpec;
 import io.druid.data.input.impl.TimestampSpec;
+import io.druid.java.util.common.DateTimes;
 import io.druid.java.util.common.Pair;
 import io.druid.js.JavaScriptConfig;
 import io.druid.query.extraction.ExtractionFn;
 import io.druid.query.extraction.JavaScriptExtractionFn;
-import io.druid.query.filter.DimFilter;
 import io.druid.query.filter.SearchQueryDimFilter;
-import io.druid.query.search.search.ContainsSearchQuerySpec;
-import io.druid.query.search.search.SearchQuerySpec;
+import io.druid.query.search.ContainsSearchQuerySpec;
+import io.druid.query.search.SearchQuerySpec;
 import io.druid.segment.IndexBuilder;
 import io.druid.segment.StorageAdapter;
-import org.joda.time.DateTime;
 import org.junit.AfterClass;
-import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -56,7 +54,7 @@ public class SearchQueryFilterTest extends BaseFilterTest
 
   private static final InputRowParser<Map<String, Object>> PARSER = new MapInputRowParser(
       new TimeAndDimsParseSpec(
-          new TimestampSpec(TIMESTAMP_COLUMN, "iso", new DateTime("2000")),
+          new TimestampSpec(TIMESTAMP_COLUMN, "iso", DateTimes.of("2000")),
           new DimensionsSpec(
               DimensionsSpec.getDefaultSchemas(ImmutableList.of("dim0", "dim1", "dim2", "dim3")),
               null,
@@ -78,10 +76,11 @@ public class SearchQueryFilterTest extends BaseFilterTest
       String testName,
       IndexBuilder indexBuilder,
       Function<IndexBuilder, Pair<StorageAdapter, Closeable>> finisher,
+      boolean cnf,
       boolean optimize
   )
   {
-    super(testName, ROWS, indexBuilder, finisher, optimize);
+    super(testName, ROWS, indexBuilder, finisher, cnf, optimize);
   }
 
   @AfterClass
@@ -150,27 +149,18 @@ public class SearchQueryFilterTest extends BaseFilterTest
   public void testSearchQueryWithExtractionFn()
   {
     String nullJsFn = "function(str) { if (str === null) { return 'NOT_NULL_ANYMORE'; } else { return str;} }";
-    ExtractionFn changeNullFn = new JavaScriptExtractionFn(nullJsFn, false, JavaScriptConfig.getDefault());
+    ExtractionFn changeNullFn = new JavaScriptExtractionFn(nullJsFn, false, JavaScriptConfig.getEnabledInstance());
 
     assertFilterMatches(new SearchQueryDimFilter("dim1", specForValue("ANYMORE"), changeNullFn), ImmutableList.of("0"));
     assertFilterMatches(new SearchQueryDimFilter("dim1", specForValue("ab"), changeNullFn), ImmutableList.<String>of("4", "5"));
 
-    assertFilterMatches(new SearchQueryDimFilter("dim2", specForValue("ANYMORE"), changeNullFn),  ImmutableList.of("1", "2", "5"));
-    assertFilterMatches(new SearchQueryDimFilter("dim2", specForValue("a"), changeNullFn),  ImmutableList.of("0", "3"));
+    assertFilterMatches(new SearchQueryDimFilter("dim2", specForValue("ANYMORE"), changeNullFn), ImmutableList.of("1", "2", "5"));
+    assertFilterMatches(new SearchQueryDimFilter("dim2", specForValue("a"), changeNullFn), ImmutableList.of("0", "3"));
 
-    assertFilterMatches(new SearchQueryDimFilter("dim3", specForValue("ANYMORE"), changeNullFn),  ImmutableList.of("0", "1", "2", "3", "4", "5"));
-    assertFilterMatches(new SearchQueryDimFilter("dim3", specForValue("a"), changeNullFn),  ImmutableList.<String>of());
+    assertFilterMatches(new SearchQueryDimFilter("dim3", specForValue("ANYMORE"), changeNullFn), ImmutableList.of("0", "1", "2", "3", "4", "5"));
+    assertFilterMatches(new SearchQueryDimFilter("dim3", specForValue("a"), changeNullFn), ImmutableList.<String>of());
 
-    assertFilterMatches(new SearchQueryDimFilter("dim4", specForValue("ANYMORE"), changeNullFn),  ImmutableList.of("0", "1", "2", "3", "4", "5"));
-    assertFilterMatches(new SearchQueryDimFilter("dim4", specForValue("a"), changeNullFn),  ImmutableList.<String>of());
-  }
-
-  private void assertFilterMatches(
-      final DimFilter filter,
-      final List<String> expectedRows
-  )
-  {
-    Assert.assertEquals(filter.toString(), expectedRows, selectColumnValuesMatchingFilter(filter, "dim0"));
-    Assert.assertEquals(filter.toString(), expectedRows.size(), selectCountUsingFilteredAggregator(filter));
+    assertFilterMatches(new SearchQueryDimFilter("dim4", specForValue("ANYMORE"), changeNullFn), ImmutableList.of("0", "1", "2", "3", "4", "5"));
+    assertFilterMatches(new SearchQueryDimFilter("dim4", specForValue("a"), changeNullFn), ImmutableList.<String>of());
   }
 }

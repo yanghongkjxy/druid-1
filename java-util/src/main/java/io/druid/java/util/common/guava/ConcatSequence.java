@@ -21,6 +21,7 @@ package io.druid.java.util.common.guava;
 
 import com.google.common.base.Throwables;
 
+import java.io.Closeable;
 import java.io.IOException;
 
 /**
@@ -30,25 +31,16 @@ public class ConcatSequence<T> implements Sequence<T>
   private final Sequence<Sequence<T>> baseSequences;
 
   public ConcatSequence(
-      Sequence<Sequence<T>> baseSequences
+      Sequence<? extends Sequence<? extends T>> baseSequences
   )
   {
-    this.baseSequences = baseSequences;
+    this.baseSequences = (Sequence<Sequence<T>>) baseSequences;
   }
 
   @Override
   public <OutType> OutType accumulate(OutType initValue, final Accumulator<OutType, T> accumulator)
   {
-    return baseSequences.accumulate(
-        initValue, new Accumulator<OutType, Sequence<T>>()
-    {
-      @Override
-      public OutType accumulate(OutType accumulated, Sequence<T> in)
-      {
-        return in.accumulate(accumulated, accumulator);
-      }
-    }
-    );
+    return baseSequences.accumulate(initValue, (accumulated, in) -> in.accumulate(accumulated, accumulator));
   }
 
   @Override
@@ -73,11 +65,14 @@ public class ConcatSequence<T> implements Sequence<T>
     try {
       return makeYielder(yielderYielder, initValue, accumulator);
     }
-    catch (RuntimeException e) {
-      // We caught a RuntimeException instead of returning a really, real, live, real boy, errr, iterator
-      // So we better try to close our stuff, 'cause the exception is what is making it out of here.
-      CloseQuietly.close(yielderYielder);
-      throw e;
+    catch (Throwable t) {
+      try {
+        yielderYielder.close();
+      }
+      catch (Exception e) {
+        t.addSuppressed(e);
+      }
+      throw t;
     }
   }
 
@@ -87,10 +82,6 @@ public class ConcatSequence<T> implements Sequence<T>
       YieldingAccumulator<OutType, T> accumulator
   )
   {
-    if (yielderYielder.isDone()) {
-      return Yielders.done(initValue, yielderYielder);
-    }
-
     while (!yielderYielder.isDone()) {
       Yielder<OutType> yielder = yielderYielder.get().toYielder(initValue, accumulator);
       if (accumulator.yielded()) {
@@ -152,8 +143,9 @@ public class ConcatSequence<T> implements Sequence<T>
       @Override
       public void close() throws IOException
       {
-        yielder.close();
-        yielderYielder.close();
+        try (Closeable toClose = yielderYielder) {
+          yielder.close();
+        }
       }
     };
   }

@@ -23,7 +23,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.MoreExecutors;
 import io.druid.data.input.Row;
-import io.druid.granularity.PeriodGranularity;
+import io.druid.java.util.common.granularity.PeriodGranularity;
 import io.druid.query.QueryRunner;
 import io.druid.query.QueryRunnerTestHelper;
 import io.druid.query.aggregation.AggregatorFactory;
@@ -62,7 +62,7 @@ public class VarianceGroupByQueryTest
   private final GroupByQueryRunnerFactory factory;
   private final String testName;
 
-  @Parameterized.Parameters(name="{0}")
+  @Parameterized.Parameters(name = "{0}")
   public static Collection<?> constructorFeeder() throws IOException
   {
     return GroupByQueryRunnerTest.constructorFeeder();

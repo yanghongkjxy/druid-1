@@ -24,15 +24,12 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
-
 import io.druid.java.util.common.Pair;
-import io.druid.java.util.common.guava.ResourceClosingSequence;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
 import io.druid.java.util.common.guava.Yielder;
 import io.druid.java.util.common.guava.YieldingAccumulator;
 import io.druid.java.util.common.guava.nary.BinaryFn;
-
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -43,6 +40,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -95,11 +93,11 @@ public class CombiningSequenceTest
   @Test
   public void testNoMergeOne() throws Exception
   {
-    List<Pair<Integer, Integer>> pairs = Arrays.asList(
+    List<Pair<Integer, Integer>> pairs = Collections.singletonList(
         Pair.of(0, 1)
     );
 
-    List<Pair<Integer, Integer>> expected = Arrays.asList(
+    List<Pair<Integer, Integer>> expected = Collections.singletonList(
         Pair.of(0, 1)
     );
 
@@ -154,7 +152,7 @@ public class CombiningSequenceTest
         Pair.of(0, 1)
     );
 
-    List<Pair<Integer, Integer>> expected = Arrays.asList(
+    List<Pair<Integer, Integer>> expected = Collections.singletonList(
         Pair.of(0, 2)
     );
 
@@ -231,8 +229,8 @@ public class CombiningSequenceTest
     };
 
     Sequence<Pair<Integer, Integer>> seq = Sequences.limit(
-        new CombiningSequence<>(
-            new ResourceClosingSequence<>(Sequences.simple(pairs), closeable),
+        CombiningSequence.create(
+            Sequences.withBaggage(Sequences.simple(pairs), closeable),
             Ordering.natural().onResultOf(Pair.<Integer, Integer>lhsFn()),
             new BinaryFn<Pair<Integer, Integer>, Pair<Integer, Integer>, Pair<Integer, Integer>>()
             {

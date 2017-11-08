@@ -19,9 +19,10 @@
 
 package io.druid.segment.column;
 
-import io.druid.segment.data.Indexed;
-import io.druid.segment.data.IndexedFloats;
+import io.druid.query.monomorphicprocessing.RuntimeShapeInspector;
+import io.druid.segment.ColumnValueSelector;
 import io.druid.segment.data.IndexedLongs;
+import io.druid.segment.data.ReadableOffset;
 
 /**
 */
@@ -29,9 +30,8 @@ public class IndexedLongsGenericColumn implements GenericColumn
 {
   private final IndexedLongs column;
 
-  public IndexedLongsGenericColumn(
-      final IndexedLongs column
-  ) {
+  public IndexedLongsGenericColumn(final IndexedLongs column)
+  {
     this.column = column;
   }
 
@@ -48,21 +48,15 @@ public class IndexedLongsGenericColumn implements GenericColumn
   }
 
   @Override
-  public boolean hasMultipleValues()
-  {
-    return false;
-  }
-
-  @Override
   public String getStringSingleValueRow(int rowNum)
   {
     throw new UnsupportedOperationException();
   }
 
   @Override
-  public Indexed<String> getStringMultiValueRow(int rowNum)
+  public ColumnValueSelector makeColumnValueSelector(ReadableOffset offset)
   {
-    throw new UnsupportedOperationException();
+    return column.makeColumnValueSelector(offset);
   }
 
   @Override
@@ -72,26 +66,26 @@ public class IndexedLongsGenericColumn implements GenericColumn
   }
 
   @Override
-  public IndexedFloats getFloatMultiValueRow(int rowNum)
-  {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
   public long getLongSingleValueRow(int rowNum)
   {
     return column.get(rowNum);
   }
 
   @Override
-  public IndexedLongs getLongMultiValueRow(int rowNum)
+  public double getDoubleSingleValueRow(int rowNum)
   {
-    throw new UnsupportedOperationException();
+    return (double) column.get(rowNum);
   }
 
   @Override
   public void close()
   {
     column.close();
+  }
+
+  @Override
+  public void inspectRuntimeShape(RuntimeShapeInspector inspector)
+  {
+    inspector.visit("column", column);
   }
 }

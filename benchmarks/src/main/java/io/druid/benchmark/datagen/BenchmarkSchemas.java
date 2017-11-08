@@ -20,6 +20,7 @@
 package io.druid.benchmark.datagen;
 
 import com.google.common.collect.ImmutableList;
+import io.druid.java.util.common.Intervals;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.CountAggregatorFactory;
 import io.druid.query.aggregation.DoubleMinAggregatorFactory;
@@ -45,7 +46,7 @@ public class BenchmarkSchemas
         // dims
         BenchmarkColumnSchema.makeSequential("dimSequential", ValueType.STRING, false, 1, null, 0, 1000),
         BenchmarkColumnSchema.makeZipf("dimZipf", ValueType.STRING, false, 1, null, 1, 101, 1.0),
-        BenchmarkColumnSchema.makeDiscreteUniform("dimUniform", ValueType.STRING, false, 1, null, 1, 1000000),
+        BenchmarkColumnSchema.makeDiscreteUniform("dimUniform", ValueType.STRING, false, 1, null, 1, 100000),
         BenchmarkColumnSchema.makeSequential("dimSequentialHalfNull", ValueType.STRING, false, 1, 0.5, 0, 1000),
         BenchmarkColumnSchema.makeEnumerated(
             "dimMultivalEnumerated",
@@ -84,13 +85,76 @@ public class BenchmarkSchemas
     basicSchemaIngestAggs.add(new DoubleMinAggregatorFactory("minFloatZipf", "metFloatZipf"));
     basicSchemaIngestAggs.add(new HyperUniquesAggregatorFactory("hyper", "dimHyperUnique"));
 
-    Interval basicSchemaDataInterval = new Interval(0, 1000000);
+    Interval basicSchemaDataInterval = Intervals.utc(0, 1000000);
 
     BenchmarkSchemaInfo basicSchema = new BenchmarkSchemaInfo(
         basicSchemaColumns,
         basicSchemaIngestAggs,
-        basicSchemaDataInterval
+        basicSchemaDataInterval,
+        true
     );
     SCHEMA_MAP.put("basic", basicSchema);
+  }
+
+  static { // simple single string column and count agg schema, no rollup
+    List<BenchmarkColumnSchema> basicSchemaColumns = ImmutableList.of(
+        // dims
+        BenchmarkColumnSchema.makeSequential("dimSequential", ValueType.STRING, false, 1, null, 0, 1000000)
+    );
+
+    List<AggregatorFactory> basicSchemaIngestAggs = new ArrayList<>();
+    basicSchemaIngestAggs.add(new CountAggregatorFactory("rows"));
+
+    Interval basicSchemaDataInterval = Intervals.utc(0, 1000000);
+
+    BenchmarkSchemaInfo basicSchema = new BenchmarkSchemaInfo(
+        basicSchemaColumns,
+        basicSchemaIngestAggs,
+        basicSchemaDataInterval,
+        false
+    );
+    SCHEMA_MAP.put("simple", basicSchema);
+  }
+
+  static { // simple single long column and count agg schema, no rollup
+    List<BenchmarkColumnSchema> basicSchemaColumns = ImmutableList.of(
+        // dims, ingest as a metric for now with rollup off, until numeric dims at ingestion are supported
+        BenchmarkColumnSchema.makeSequential("dimSequential", ValueType.LONG, true, 1, null, 0, 1000000)
+    );
+
+    List<AggregatorFactory> basicSchemaIngestAggs = new ArrayList<>();
+    basicSchemaIngestAggs.add(new LongSumAggregatorFactory("dimSequential", "dimSequential"));
+    basicSchemaIngestAggs.add(new CountAggregatorFactory("rows"));
+
+    Interval basicSchemaDataInterval = Intervals.utc(0, 1000000);
+
+    BenchmarkSchemaInfo basicSchema = new BenchmarkSchemaInfo(
+        basicSchemaColumns,
+        basicSchemaIngestAggs,
+        basicSchemaDataInterval,
+        false
+    );
+    SCHEMA_MAP.put("simpleLong", basicSchema);
+  }
+
+  static { // simple single float column and count agg schema, no rollup
+    List<BenchmarkColumnSchema> basicSchemaColumns = ImmutableList.of(
+        // dims, ingest as a metric for now with rollup off, until numeric dims at ingestion are supported
+        BenchmarkColumnSchema.makeSequential("dimSequential", ValueType.FLOAT, true, 1, null, 0, 1000000)
+    );
+
+    List<AggregatorFactory> basicSchemaIngestAggs = new ArrayList<>();
+    basicSchemaIngestAggs.add(new DoubleSumAggregatorFactory("dimSequential", "dimSequential"));
+    basicSchemaIngestAggs.add(new CountAggregatorFactory("rows"));
+
+    Interval basicSchemaDataInterval = Intervals.utc(0, 1000000);
+
+    BenchmarkSchemaInfo basicSchema = new BenchmarkSchemaInfo(
+        basicSchemaColumns,
+        basicSchemaIngestAggs,
+        basicSchemaDataInterval,
+        false
+    );
+    SCHEMA_MAP.put("simpleFloat", basicSchema);
   }
 }

@@ -20,6 +20,7 @@
 package io.druid.storage.s3;
 
 import com.amazonaws.auth.AWSCredentialsProvider;
+import com.amazonaws.auth.AWSSessionCredentials;
 import com.fasterxml.jackson.core.Version;
 import com.fasterxml.jackson.databind.Module;
 import com.google.common.collect.ImmutableList;
@@ -27,7 +28,6 @@ import com.google.inject.Binder;
 import com.google.inject.Provides;
 import com.google.inject.multibindings.MapBinder;
 import io.druid.common.aws.AWSCredentialsConfig;
-import io.druid.common.aws.AWSCredentialsUtils;
 import io.druid.data.SearchableVersionedDataFinder;
 import io.druid.guice.Binders;
 import io.druid.guice.JsonConfigProvider;
@@ -43,6 +43,7 @@ import java.util.List;
 public class S3StorageDruidModule implements DruidModule
 {
   public static final String SCHEME = "s3_zip";
+
   @Override
   public List<? extends Module> getJacksonModules()
   {
@@ -85,7 +86,10 @@ public class S3StorageDruidModule implements DruidModule
     Binders.dataSegmentPullerBinder(binder).addBinding(SCHEME).to(S3DataSegmentPuller.class).in(LazySingleton.class);
     Binders.dataSegmentKillerBinder(binder).addBinding(SCHEME).to(S3DataSegmentKiller.class).in(LazySingleton.class);
     Binders.dataSegmentMoverBinder(binder).addBinding(SCHEME).to(S3DataSegmentMover.class).in(LazySingleton.class);
-    Binders.dataSegmentArchiverBinder(binder).addBinding(SCHEME).to(S3DataSegmentArchiver.class).in(LazySingleton.class);
+    Binders.dataSegmentArchiverBinder(binder)
+           .addBinding(SCHEME)
+           .to(S3DataSegmentArchiver.class)
+           .in(LazySingleton.class);
     Binders.dataSegmentPusherBinder(binder).addBinding("s3").to(S3DataSegmentPusher.class).in(LazySingleton.class);
     Binders.dataSegmentFinderBinder(binder).addBinding("s3").to(S3DataSegmentFinder.class).in(LazySingleton.class);
     JsonConfigProvider.bind(binder, "druid.storage", S3DataSegmentPusherConfig.class);
@@ -98,16 +102,9 @@ public class S3StorageDruidModule implements DruidModule
 
   @Provides
   @LazySingleton
-  public AWSCredentialsProvider getAWSCredentialsProvider(final AWSCredentialsConfig config)
-  {
-    return AWSCredentialsUtils.defaultAWSCredentialsProviderChain(config);
-  }
-
-  @Provides
-  @LazySingleton
   public RestS3Service getRestS3Service(AWSCredentialsProvider provider)
   {
-    if(provider.getCredentials() instanceof com.amazonaws.auth.AWSSessionCredentials) {
+    if (provider.getCredentials() instanceof AWSSessionCredentials) {
       return new RestS3Service(new AWSSessionCredentialsAdapter(provider));
     } else {
       return new RestS3Service(new AWSCredentials(

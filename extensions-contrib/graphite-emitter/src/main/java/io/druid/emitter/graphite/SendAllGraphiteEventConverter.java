@@ -1,20 +1,20 @@
 /*
- *  Licensed to Metamarkets Group Inc. (Metamarkets) under one
- *  or more contributor license agreements. See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership. Metamarkets licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License. You may obtain a copy of the License at
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied. See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
 package io.druid.emitter.graphite;
@@ -31,7 +31,7 @@ import com.metamx.emitter.service.ServiceMetricEvent;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Emits all the events instance of {@link com.metamx.emitter.service.ServiceMetricEvent}.
+ * Emits all the events instance of {@link ServiceMetricEvent}.
  * <p>
  * All the dimensions will be retained and lexicographically order using dimensions name.
  * <p>
@@ -54,6 +54,9 @@ public class SendAllGraphiteEventConverter implements DruidToGraphiteEventConver
   private final String namespacePrefix;
 
   @JsonProperty
+  private final boolean replaceSlashWithDot;
+
+  @JsonProperty
   public String getNamespacePrefix()
   {
     return namespacePrefix;
@@ -71,15 +74,23 @@ public class SendAllGraphiteEventConverter implements DruidToGraphiteEventConver
     return ignoreHostname;
   }
 
+  @JsonProperty
+  public boolean replaceSlashWithDot()
+  {
+    return replaceSlashWithDot;
+  }
+
   @JsonCreator
   public SendAllGraphiteEventConverter(
       @JsonProperty("namespacePrefix") String namespacePrefix,
       @JsonProperty("ignoreHostname") Boolean ignoreHostname,
-      @JsonProperty("ignoreServiceName") Boolean ignoreServiceName
+      @JsonProperty("ignoreServiceName") Boolean ignoreServiceName,
+      @JsonProperty("replaceSlashWithDot") Boolean replaceSlashWithDot
   )
   {
     this.ignoreHostname = ignoreHostname == null ? false : ignoreHostname;
     this.ignoreServiceName = ignoreServiceName == null ? false : ignoreServiceName;
+    this.replaceSlashWithDot = replaceSlashWithDot == null ? false : replaceSlashWithDot;
     this.namespacePrefix = Preconditions.checkNotNull(namespacePrefix, "namespace prefix can not be null");
   }
 
@@ -100,7 +111,7 @@ public class SendAllGraphiteEventConverter implements DruidToGraphiteEventConver
       metricPathBuilder.add(GraphiteEmitter.sanitize(String.valueOf(serviceMetricEvent.getUserDims()
                                                                                       .get(dimName))));
     }
-    metricPathBuilder.add(GraphiteEmitter.sanitize(serviceMetricEvent.getMetric()));
+    metricPathBuilder.add(GraphiteEmitter.sanitize(serviceMetricEvent.getMetric(), this.replaceSlashWithDot()));
 
     return new GraphiteEvent(
         Joiner.on(".").join(metricPathBuilder.build()),
@@ -127,6 +138,9 @@ public class SendAllGraphiteEventConverter implements DruidToGraphiteEventConver
     if (isIgnoreServiceName() != that.isIgnoreServiceName()) {
       return false;
     }
+    if (replaceSlashWithDot() != that.replaceSlashWithDot()) {
+      return false;
+    }
     return getNamespacePrefix().equals(that.getNamespacePrefix());
 
   }
@@ -136,6 +150,7 @@ public class SendAllGraphiteEventConverter implements DruidToGraphiteEventConver
   {
     int result = (isIgnoreHostname() ? 1 : 0);
     result = 31 * result + (isIgnoreServiceName() ? 1 : 0);
+    result = 31 * result + (replaceSlashWithDot() ? 1 : 0);
     result = 31 * result + getNamespacePrefix().hashCode();
     return result;
   }

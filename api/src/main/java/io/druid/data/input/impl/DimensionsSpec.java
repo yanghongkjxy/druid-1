@@ -1,18 +1,20 @@
 /*
- * Druid - a distributed column store.
- * Copyright 2012 - 2015 Metamarkets Group Inc.
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
 package io.druid.data.input.impl;
@@ -26,7 +28,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-
+import io.druid.guice.annotations.PublicApi;
 import io.druid.java.util.common.parsers.ParserUtils;
 
 import javax.annotation.Nullable;
@@ -35,17 +37,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-
+@PublicApi
 public class DimensionsSpec
 {
   private final List<DimensionSchema> dimensions;
   private final Set<String> dimensionExclusions;
   private final Map<String, DimensionSchema> dimensionSchemaMap;
 
-  public static DimensionsSpec ofEmpty()
-  {
-    return new DimensionsSpec(null, null, null);
-  }
+  public static final DimensionsSpec EMPTY = new DimensionsSpec(null, null, null);
 
   public static List<DimensionSchema> getDefaultSchemas(List<String> dimNames)
   {
@@ -102,7 +101,7 @@ public class DimensionsSpec
       dimensionSchemaMap.put(schema.getName(), schema);
     }
 
-    for(SpatialDimensionSchema spatialSchema : spatialDims) {
+    for (SpatialDimensionSchema spatialSchema : spatialDims) {
       DimensionSchema newSchema = DimensionsSpec.convertSpatialSchema(spatialSchema);
       this.dimensions.add(newSchema);
       dimensionSchemaMap.put(newSchema.getName(), newSchema);
@@ -122,7 +121,8 @@ public class DimensionsSpec
     return dimensionExclusions;
   }
 
-  @Deprecated @JsonIgnore
+  @Deprecated
+  @JsonIgnore
   public List<SpatialDimensionSchema> getSpatialDimensions()
   {
     Iterable<NewSpatialDimensionSchema> filteredList = Iterables.filter(
@@ -244,5 +244,14 @@ public class DimensionsSpec
     int result = dimensions.hashCode();
     result = 31 * result + dimensionExclusions.hashCode();
     return result;
+  }
+
+  @Override
+  public String toString()
+  {
+    return "DimensionsSpec{" +
+           "dimensions=" + dimensions +
+           ", dimensionExclusions=" + dimensionExclusions +
+           '}';
   }
 }

@@ -20,12 +20,11 @@
 package io.druid.indexer.path;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Optional;
 import com.google.common.collect.Sets;
 
+import io.druid.java.util.common.granularity.Granularity;
 import io.druid.indexer.HadoopDruidIndexerConfig;
 import io.druid.indexer.hadoop.FSSpideringIterator;
-import io.druid.java.util.common.Granularity;
 import io.druid.java.util.common.guava.Comparators;
 import io.druid.java.util.common.logger.Logger;
 
@@ -113,13 +112,10 @@ public class GranularityPathSpec implements PathSpec
   @Override
   public Job addInputPaths(HadoopDruidIndexerConfig config, Job job) throws IOException
   {
-    final Set<Interval> intervals = Sets.newTreeSet(Comparators.intervals());
-    Optional<Set<Interval>> optionalIntervals = config.getSegmentGranularIntervals();
-    if (optionalIntervals.isPresent()) {
-      for (Interval segmentInterval : optionalIntervals.get()) {
-        for (Interval dataInterval : dataGranularity.getIterable(segmentInterval)) {
-          intervals.add(dataInterval);
-        }
+    final Set<Interval> intervals = Sets.newTreeSet(Comparators.intervalsByStartThenEnd());
+    for (Interval inputInterval : config.getInputIntervals()) {
+      for (Interval interval : dataGranularity.getIterable(inputInterval)) {
+        intervals.add(trim(inputInterval, interval));
       }
     }
 
@@ -129,17 +125,16 @@ public class GranularityPathSpec implements PathSpec
     Pattern fileMatcher = Pattern.compile(filePattern);
 
     DateTimeFormatter customFormatter = null;
-    if(pathFormat != null) {
+    if (pathFormat != null) {
       customFormatter = DateTimeFormat.forPattern(pathFormat);
     }
 
     for (Interval interval : intervals) {
       DateTime t = interval.getStart();
-      String intervalPath = null;
-      if(customFormatter != null) {
+      String intervalPath;
+      if (customFormatter != null) {
         intervalPath = customFormatter.print(t);
-      }
-      else {
+      } else {
         intervalPath = dataGranularity.toPath(t);
       }
 
@@ -158,4 +153,22 @@ public class GranularityPathSpec implements PathSpec
 
     return job;
   }
+
+  private Interval trim(Interval inputInterval, Interval interval)
+  {
+    long start = interval.getStartMillis();
+    long end = interval.getEndMillis();
+
+    boolean makeNew = false;
+    if (start < inputInterval.getStartMillis()) {
+      start = inputInterval.getStartMillis();
+      makeNew = true;
+    }
+    if (end > inputInterval.getEndMillis()) {
+      end = inputInterval.getEndMillis();
+      makeNew = true;
+    }
+    return makeNew ? new Interval(start, end, interval.getChronology()) : interval;
+  }
+
 }

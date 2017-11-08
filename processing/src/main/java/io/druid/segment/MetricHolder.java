@@ -26,12 +26,16 @@ import com.google.common.io.OutputSupplier;
 import io.druid.common.utils.SerializerUtils;
 import io.druid.java.util.common.IAE;
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.io.smoosh.SmooshedFileMapper;
+import io.druid.segment.data.CompressedDoublesIndexedSupplier;
 import io.druid.segment.data.CompressedFloatsIndexedSupplier;
 import io.druid.segment.data.CompressedLongsIndexedSupplier;
+import io.druid.segment.data.DoubleSupplierSerializer;
 import io.druid.segment.data.FloatSupplierSerializer;
 import io.druid.segment.data.GenericIndexed;
 import io.druid.segment.data.GenericIndexedWriter;
 import io.druid.segment.data.Indexed;
+import io.druid.segment.data.IndexedDoubles;
 import io.druid.segment.data.IndexedFloats;
 import io.druid.segment.data.IndexedLongs;
 import io.druid.segment.data.LongSupplierSerializer;
@@ -44,7 +48,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.channels.WritableByteChannel;
 
 /**
  */
@@ -75,7 +78,6 @@ public class MetricHolder
       out.write(version);
       serializerUtils.writeString(out, name);
       serializerUtils.writeString(out, typeName);
-
       final InputSupplier<InputStream> supplier = column.combineStreams();
       try (InputStream in = supplier.getInput()) {
         ByteStreams.copy(in, out);
@@ -103,32 +105,23 @@ public class MetricHolder
     column.closeAndConsolidate(outSupplier);
   }
 
-  public static void writeToChannel(MetricHolder holder, WritableByteChannel out) throws IOException
+  public static void writeDoubleMetric(ByteSink outSupplier, String name, DoubleSupplierSerializer column
+  ) throws IOException
   {
-    out.write(ByteBuffer.wrap(version));
-    serializerUtils.writeString(out, holder.name);
-    serializerUtils.writeString(out, holder.typeName);
-
-    switch (holder.type) {
-      case FLOAT:
-        holder.floatType.writeToChannel(out);
-        break;
-      case COMPLEX:
-        if (holder.complexType instanceof GenericIndexed) {
-          ((GenericIndexed) holder.complexType).writeToChannel(out);
-        } else {
-          throw new IAE("Cannot serialize out MetricHolder for complex type that is not a GenericIndexed");
-        }
-        break;
-    }
+    outSupplier.write(version);
+    serializerUtils.writeString(toOutputSupplier(outSupplier), name);
+    serializerUtils.writeString(toOutputSupplier(outSupplier), "double");
+    column.closeAndConsolidate(outSupplier);
   }
 
-  public static MetricHolder fromByteBuffer(ByteBuffer buf) throws IOException
+
+  public static MetricHolder fromByteBuffer(ByteBuffer buf, SmooshedFileMapper mapper) throws IOException
   {
-    return fromByteBuffer(buf, null);
+    return fromByteBuffer(buf, null, mapper);
   }
 
-  public static MetricHolder fromByteBuffer(ByteBuffer buf, ObjectStrategy strategy) throws IOException
+  public static MetricHolder fromByteBuffer(ByteBuffer buf, ObjectStrategy strategy, SmooshedFileMapper mapper)
+      throws IOException
   {
     final byte ver = buf.get();
     if (version[0] != ver) {
@@ -141,14 +134,17 @@ public class MetricHolder
 
     switch (holder.type) {
       case LONG:
-        holder.longType = CompressedLongsIndexedSupplier.fromByteBuffer(buf, ByteOrder.nativeOrder());
+        holder.longType = CompressedLongsIndexedSupplier.fromByteBuffer(buf, ByteOrder.nativeOrder(), mapper);
         break;
       case FLOAT:
-        holder.floatType = CompressedFloatsIndexedSupplier.fromByteBuffer(buf, ByteOrder.nativeOrder());
+        holder.floatType = CompressedFloatsIndexedSupplier.fromByteBuffer(buf, ByteOrder.nativeOrder(), mapper);
+        break;
+      case DOUBLE:
+        holder.doubleType = CompressedDoublesIndexedSupplier.fromByteBuffer(buf, ByteOrder.nativeOrder(), mapper);
         break;
       case COMPLEX:
         if (strategy != null) {
-          holder.complexType = GenericIndexed.read(buf, strategy);
+          holder.complexType = GenericIndexed.read(buf, strategy, mapper);
         } else {
           final ComplexMetricSerde serdeForType = ComplexMetrics.getSerdeForType(holder.getTypeName());
 
@@ -165,7 +161,8 @@ public class MetricHolder
   }
 
   // This is only for guava14 compat. Eventually it should be able to be removed.
-  private static OutputSupplier<? extends OutputStream> toOutputSupplier(final ByteSink sink) {
+  private static OutputSupplier<? extends OutputStream> toOutputSupplier(final ByteSink sink)
+  {
     return new OutputSupplier<OutputStream>()
     {
       @Override
@@ -184,6 +181,7 @@ public class MetricHolder
   {
     LONG,
     FLOAT,
+    DOUBLE,
     COMPLEX;
 
     static MetricType determineType(String typeName)
@@ -192,6 +190,8 @@ public class MetricHolder
         return LONG;
       } else if ("float".equalsIgnoreCase(typeName)) {
         return FLOAT;
+      } else if ("double".equalsIgnoreCase(typeName)) {
+        return DOUBLE;
       }
       return COMPLEX;
     }
@@ -199,6 +199,7 @@ public class MetricHolder
 
   CompressedLongsIndexedSupplier longType = null;
   CompressedFloatsIndexedSupplier floatType = null;
+  CompressedDoublesIndexedSupplier doubleType = null;
   Indexed complexType = null;
 
   private MetricHolder(
@@ -236,6 +237,12 @@ public class MetricHolder
   {
     assertType(MetricType.FLOAT);
     return floatType.get();
+  }
+
+  public IndexedDoubles getDoubleType()
+  {
+    assertType(MetricType.DOUBLE);
+    return doubleType.get();
   }
 
   public Indexed getComplexType()

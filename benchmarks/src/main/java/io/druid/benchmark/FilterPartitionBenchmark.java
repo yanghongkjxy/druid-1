@@ -24,16 +24,14 @@ import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
-import com.google.common.hash.Hashing;
 import com.google.common.io.Files;
-
 import io.druid.benchmark.datagen.BenchmarkDataGenerator;
 import io.druid.benchmark.datagen.BenchmarkSchemaInfo;
 import io.druid.benchmark.datagen.BenchmarkSchemas;
 import io.druid.data.input.InputRow;
-import io.druid.data.input.impl.DimensionsSpec;
-import io.druid.granularity.QueryGranularities;
+import io.druid.hll.HyperLogLogHash;
 import io.druid.jackson.DefaultObjectMapper;
+import io.druid.java.util.common.granularity.Granularities;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
 import io.druid.java.util.common.logger.Logger;
@@ -46,21 +44,24 @@ import io.druid.query.filter.AndDimFilter;
 import io.druid.query.filter.BitmapIndexSelector;
 import io.druid.query.filter.BoundDimFilter;
 import io.druid.query.filter.DimFilter;
+import io.druid.query.filter.DruidDoublePredicate;
+import io.druid.query.filter.DruidFloatPredicate;
 import io.druid.query.filter.DruidLongPredicate;
 import io.druid.query.filter.DruidPredicateFactory;
 import io.druid.query.filter.Filter;
 import io.druid.query.filter.OrDimFilter;
 import io.druid.query.filter.SelectorDimFilter;
 import io.druid.query.ordering.StringComparators;
+import io.druid.segment.BaseLongColumnValueSelector;
 import io.druid.segment.Cursor;
 import io.druid.segment.DimensionSelector;
 import io.druid.segment.IndexIO;
 import io.druid.segment.IndexMergerV9;
 import io.druid.segment.IndexSpec;
-import io.druid.segment.LongColumnSelector;
 import io.druid.segment.QueryableIndex;
 import io.druid.segment.QueryableIndexStorageAdapter;
 import io.druid.segment.StorageAdapter;
+import io.druid.segment.VirtualColumns;
 import io.druid.segment.column.Column;
 import io.druid.segment.column.ColumnConfig;
 import io.druid.segment.data.IndexedInts;
@@ -71,9 +72,8 @@ import io.druid.segment.filter.Filters;
 import io.druid.segment.filter.OrFilter;
 import io.druid.segment.filter.SelectorFilter;
 import io.druid.segment.incremental.IncrementalIndex;
-import io.druid.segment.incremental.IncrementalIndexSchema;
-import io.druid.segment.incremental.OnheapIncrementalIndex;
 import io.druid.segment.serde.ComplexMetrics;
+import org.apache.commons.io.FileUtils;
 import org.joda.time.Interval;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -85,6 +85,7 @@ import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
@@ -97,7 +98,7 @@ import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 @State(Scope.Benchmark)
-@Fork(jvmArgsPrepend = "-server", value = 1)
+@Fork(value = 1)
 @Warmup(iterations = 10)
 @Measurement(iterations = 25)
 public class FilterPartitionBenchmark
@@ -116,6 +117,7 @@ public class FilterPartitionBenchmark
   private IncrementalIndex incIndex;
   private QueryableIndex qIndex;
   private File indexFile;
+  private File tmpDir;
 
   private Filter timeFilterNone;
   private Filter timeFilterHalf;
@@ -124,7 +126,7 @@ public class FilterPartitionBenchmark
   private BenchmarkSchemaInfo schemaInfo;
 
   private static String JS_FN = "function(str) { return 'super-' + str; }";
-  private static ExtractionFn JS_EXTRACTION_FN = new JavaScriptExtractionFn(JS_FN, false, JavaScriptConfig.getDefault());
+  private static ExtractionFn JS_EXTRACTION_FN = new JavaScriptExtractionFn(JS_FN, false, JavaScriptConfig.getEnabledInstance());
 
   static {
     JSON_MAPPER = new DefaultObjectMapper();
@@ -148,7 +150,7 @@ public class FilterPartitionBenchmark
     log.info("SETUP CALLED AT " + System.currentTimeMillis());
 
     if (ComplexMetrics.getSerdeForType("hyperUnique") == null) {
-      ComplexMetrics.registerSerde("hyperUnique", new HyperUniquesSerde(Hashing.murmur3_128()));
+      ComplexMetrics.registerSerde("hyperUnique", new HyperUniquesSerde(HyperLogLogHash.getDefault()));
     }
 
     schemaInfo = BenchmarkSchemas.SCHEMA_MAP.get(schema);
@@ -170,13 +172,12 @@ public class FilterPartitionBenchmark
       incIndex.add(row);
     }
 
-    File tmpFile = Files.createTempDir();
-    log.info("Using temp dir: " + tmpFile.getAbsolutePath());
-    tmpFile.deleteOnExit();
+    tmpDir = Files.createTempDir();
+    log.info("Using temp dir: " + tmpDir.getAbsolutePath());
 
     indexFile = INDEX_MERGER_V9.persist(
         incIndex,
-        tmpFile,
+        tmpDir,
         new IndexSpec()
     );
     qIndex = INDEX_IO.loadIndex(indexFile);
@@ -217,19 +218,19 @@ public class FilterPartitionBenchmark
     ));
   }
 
+  @TearDown
+  public void tearDown() throws IOException
+  {
+    FileUtils.deleteDirectory(tmpDir);
+  }
+
   private IncrementalIndex makeIncIndex()
   {
-    return new OnheapIncrementalIndex(
-        new IncrementalIndexSchema.Builder()
-            .withQueryGranularity(QueryGranularities.NONE)
-            .withMetrics(schemaInfo.getAggsArray())
-            .withDimensionsSpec(new DimensionsSpec(null, null, null))
-            .build(),
-        true,
-        false,
-        true,
-        rowsPerSegment
-    );
+    return new IncrementalIndex.Builder()
+        .setSimpleTestingIndexSchema(schemaInfo.getAggsArray())
+        .setReportParseExceptions(false)
+        .setMaxRowCount(rowsPerSegment)
+        .buildOnheap();
   }
 
   @Benchmark
@@ -238,7 +239,7 @@ public class FilterPartitionBenchmark
   public void stringRead(Blackhole blackhole) throws Exception
   {
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(null, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, null);
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -253,7 +254,7 @@ public class FilterPartitionBenchmark
   public void longRead(Blackhole blackhole) throws Exception
   {
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(null, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, null);
 
     Sequence<List<Long>> longListSeq = readCursorsLong(cursors, blackhole);
     List<Long> strings = Sequences.toList(Sequences.limit(longListSeq, 1), Lists.<List<Long>>newArrayList()).get(0);
@@ -268,7 +269,7 @@ public class FilterPartitionBenchmark
   public void timeFilterNone(Blackhole blackhole) throws Exception
   {
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(timeFilterNone, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, timeFilterNone);
 
     Sequence<List<Long>> longListSeq = readCursorsLong(cursors, blackhole);
     List<Long> strings = Sequences.toList(Sequences.limit(longListSeq, 1), Lists.<List<Long>>newArrayList()).get(0);
@@ -283,7 +284,7 @@ public class FilterPartitionBenchmark
   public void timeFilterHalf(Blackhole blackhole) throws Exception
   {
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(timeFilterHalf, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, timeFilterHalf);
 
     Sequence<List<Long>> longListSeq = readCursorsLong(cursors, blackhole);
     List<Long> strings = Sequences.toList(Sequences.limit(longListSeq, 1), Lists.<List<Long>>newArrayList()).get(0);
@@ -298,7 +299,7 @@ public class FilterPartitionBenchmark
   public void timeFilterAll(Blackhole blackhole) throws Exception
   {
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(timeFilterAll, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, timeFilterAll);
 
     Sequence<List<Long>> longListSeq = readCursorsLong(cursors, blackhole);
     List<Long> strings = Sequences.toList(Sequences.limit(longListSeq, 1), Lists.<List<Long>>newArrayList()).get(0);
@@ -315,7 +316,7 @@ public class FilterPartitionBenchmark
     Filter filter = new SelectorFilter("dimSequential", "199");
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(filter, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, filter);
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -332,7 +333,7 @@ public class FilterPartitionBenchmark
     Filter filter = new NoBitmapSelectorFilter("dimSequential", "199");
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(filter, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, filter);
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -349,7 +350,7 @@ public class FilterPartitionBenchmark
     Filter filter = new SelectorDimFilter("dimSequential", "super-199", JS_EXTRACTION_FN).toFilter();
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(filter, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, filter);
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -366,7 +367,7 @@ public class FilterPartitionBenchmark
     Filter filter = new NoBitmapSelectorDimFilter("dimSequential", "super-199", JS_EXTRACTION_FN).toFilter();
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(filter, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, filter);
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -385,7 +386,7 @@ public class FilterPartitionBenchmark
     Filter orFilter = new OrFilter(Arrays.<Filter>asList(filter, filter2));
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(orFilter, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, orFilter);
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -404,7 +405,7 @@ public class FilterPartitionBenchmark
     Filter orFilter = new OrFilter(Arrays.<Filter>asList(filter, filter2));
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(Filters.convertToCNF(orFilter), schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, Filters.convertToCNF(orFilter));
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -446,7 +447,7 @@ public class FilterPartitionBenchmark
     );
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(dimFilter3.toFilter(), schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, dimFilter3.toFilter());
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
@@ -488,13 +489,18 @@ public class FilterPartitionBenchmark
     );
 
     StorageAdapter sa = new QueryableIndexStorageAdapter(qIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(Filters.convertToCNF(dimFilter3.toFilter()), schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, Filters.convertToCNF(dimFilter3.toFilter()));
 
     Sequence<List<String>> stringListSeq = readCursors(cursors, blackhole);
     List<String> strings = Sequences.toList(Sequences.limit(stringListSeq, 1), Lists.<List<String>>newArrayList()).get(0);
     for (String st : strings) {
       blackhole.consume(st);
     }
+  }
+
+  private Sequence<Cursor> makeCursors(StorageAdapter sa, Filter filter)
+  {
+    return sa.makeCursors(filter, schemaInfo.getDataInterval(), VirtualColumns.EMPTY, Granularities.ALL, false, null);
   }
 
   private Sequence<List<String>> readCursors(Sequence<Cursor> cursors, final Blackhole blackhole)
@@ -508,7 +514,9 @@ public class FilterPartitionBenchmark
           {
             List<String> strings = new ArrayList<String>();
             List<DimensionSelector> selectors = new ArrayList<>();
-            selectors.add(input.makeDimensionSelector(new DefaultDimensionSpec("dimSequential", null)));
+            selectors.add(
+                input.getColumnSelectorFactory().makeDimensionSelector(new DefaultDimensionSpec("dimSequential", null))
+            );
             //selectors.add(input.makeDimensionSelector(new DefaultDimensionSpec("dimB", null)));
             while (!input.isDone()) {
               for (DimensionSelector selector : selectors) {
@@ -534,9 +542,9 @@ public class FilterPartitionBenchmark
           public List<Long> apply(Cursor input)
           {
             List<Long> longvals = new ArrayList<Long>();
-            LongColumnSelector selector = input.makeLongColumnSelector("sumLongSequential");
+            BaseLongColumnValueSelector selector = input.getColumnSelectorFactory().makeColumnValueSelector("sumLongSequential");
             while (!input.isDone()) {
-              long rowval = selector.get();
+              long rowval = selector.getLong();
               blackhole.consume(rowval);
               input.advance();
             }
@@ -546,7 +554,7 @@ public class FilterPartitionBenchmark
     );
   }
 
-  private class NoBitmapSelectorFilter extends SelectorFilter
+  private static class NoBitmapSelectorFilter extends SelectorFilter
   {
     public NoBitmapSelectorFilter(
         String dimension,
@@ -563,7 +571,7 @@ public class FilterPartitionBenchmark
     }
   }
 
-  private class NoBitmapDimensionPredicateFilter extends DimensionPredicateFilter
+  private static class NoBitmapDimensionPredicateFilter extends DimensionPredicateFilter
   {
     public NoBitmapDimensionPredicateFilter(
         final String dimension,
@@ -581,7 +589,7 @@ public class FilterPartitionBenchmark
     }
   }
 
-  private class NoBitmapSelectorDimFilter extends SelectorDimFilter
+  private static class NoBitmapSelectorDimFilter extends SelectorDimFilter
   {
     public NoBitmapSelectorDimFilter(
         String dimension,
@@ -620,14 +628,19 @@ public class FilterPartitionBenchmark
           @Override
           public DruidLongPredicate makeLongPredicate()
           {
-            return new DruidLongPredicate()
-            {
-              @Override
-              public boolean applyLong(long input)
-              {
-                return false;
-              }
-            };
+            return DruidLongPredicate.ALWAYS_FALSE;
+          }
+
+          @Override
+          public DruidFloatPredicate makeFloatPredicate()
+          {
+            return DruidFloatPredicate.ALWAYS_FALSE;
+          }
+
+          @Override
+          public DruidDoublePredicate makeDoublePredicate()
+          {
+            return DruidDoublePredicate.ALWAYS_FALSE;
           }
         };
 

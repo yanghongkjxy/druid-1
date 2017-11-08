@@ -25,12 +25,12 @@ import com.google.common.base.Throwables;
 import com.google.common.io.ByteSource;
 import com.google.common.io.Files;
 import com.google.inject.Inject;
-
 import io.druid.java.util.common.CompressionUtils;
 import io.druid.java.util.common.FileUtils;
 import io.druid.java.util.common.IAE;
-import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.IOE;
 import io.druid.java.util.common.MapUtils;
+import io.druid.java.util.common.RE;
 import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.UOE;
 import io.druid.java.util.common.logger.Logger;
@@ -38,6 +38,12 @@ import io.druid.segment.loading.DataSegmentPuller;
 import io.druid.segment.loading.SegmentLoadingException;
 import io.druid.segment.loading.URIDataPuller;
 import io.druid.timeline.DataSegment;
+import org.jets3t.service.S3ServiceException;
+import org.jets3t.service.ServiceException;
+import org.jets3t.service.impl.rest.httpclient.RestS3Service;
+import org.jets3t.service.model.StorageObject;
+
+import javax.tools.FileObject;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -47,11 +53,6 @@ import java.io.Writer;
 import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.Callable;
-import javax.tools.FileObject;
-import org.jets3t.service.S3ServiceException;
-import org.jets3t.service.ServiceException;
-import org.jets3t.service.impl.rest.httpclient.RestS3Service;
-import org.jets3t.service.model.StorageObject;
 
 /**
  * A data segment puller that also hanldes URI data pulls.
@@ -101,7 +102,7 @@ public class S3DataSegmentPuller implements DataSegmentPuller, URIDataPuller
           }
         }
         catch (ServiceException e) {
-          throw new IOException(StringUtils.safeFormat("Could not load S3 URI [%s]", uri), e);
+          throw new IOE(e, "Could not load S3 URI [%s]", uri);
         }
       }
 
@@ -176,16 +177,10 @@ public class S3DataSegmentPuller implements DataSegmentPuller, URIDataPuller
       throw new SegmentLoadingException("IndexFile[%s] does not exist.", s3Coords);
     }
 
-    if (!outDir.exists()) {
-      outDir.mkdirs();
-    }
-
-    if (!outDir.isDirectory()) {
-      throw new ISE("outDir[%s] must be a directory.", outDir);
-    }
-
     try {
-      final URI uri = URI.create(String.format("s3://%s/%s", s3Coords.bucket, s3Coords.path));
+      org.apache.commons.io.FileUtils.forceMkdir(outDir);
+
+      final URI uri = URI.create(StringUtils.format("s3://%s/%s", s3Coords.bucket, s3Coords.path));
       final ByteSource byteSource = new ByteSource()
       {
         @Override
@@ -209,7 +204,7 @@ public class S3DataSegmentPuller implements DataSegmentPuller, URIDataPuller
             byteSource,
             outDir,
             S3Utils.S3RETRY,
-            true
+            false
         );
         log.info("Loaded %d bytes from [%s] to [%s]", result.size(), s3Coords.toString(), outDir.getAbsolutePath());
         return result;
@@ -257,7 +252,7 @@ public class S3DataSegmentPuller implements DataSegmentPuller, URIDataPuller
       return buildFileObject(uri, s3Client).openInputStream();
     }
     catch (ServiceException e) {
-      throw new IOException(String.format("Could not load URI [%s]", uri.toString()), e);
+      throw new IOE(e, "Could not load URI [%s]", uri);
     }
   }
 
@@ -299,17 +294,14 @@ public class S3DataSegmentPuller implements DataSegmentPuller, URIDataPuller
   {
     try {
       final FileObject object = buildFileObject(uri, s3Client);
-      return String.format("%d", object.getLastModified());
+      return StringUtils.format("%d", object.getLastModified());
     }
     catch (ServiceException e) {
       if (S3Utils.isServiceExceptionRecoverable(e)) {
         // The recoverable logic is always true for IOException, so we want to only pass IOException if it is recoverable
-        throw new IOException(
-            String.format("Could not fetch last modified timestamp from URI [%s]", uri.toString()),
-            e
-        );
+        throw new IOE(e, "Could not fetch last modified timestamp from URI [%s]", uri);
       } else {
-        throw Throwables.propagate(e);
+        throw new RE(e, "Error fetching last modified timestamp from URI [%s]", uri);
       }
     }
   }
@@ -370,9 +362,10 @@ public class S3DataSegmentPuller implements DataSegmentPuller, URIDataPuller
       this.path = key;
     }
 
+    @Override
     public String toString()
     {
-      return String.format("s3://%s/%s", bucket, path);
+      return StringUtils.format("s3://%s/%s", bucket, path);
     }
   }
 }

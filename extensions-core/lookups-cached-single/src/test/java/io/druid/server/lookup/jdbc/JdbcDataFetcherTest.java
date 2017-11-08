@@ -1,22 +1,20 @@
 /*
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
  *
- *  Licensed to Metamarkets Group Inc. (Metamarkets) under one
- *  or more contributor license agreements. See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership. Metamarkets licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License. You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied. See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
- * /
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
 package io.druid.server.lookup.jdbc;
@@ -24,6 +22,7 @@ package io.druid.server.lookup.jdbc;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Sets;
 import io.druid.jackson.DefaultObjectMapper;
+import io.druid.java.util.common.StringUtils;
 import io.druid.metadata.MetadataStorageConnectorConfig;
 import io.druid.metadata.TestDerbyConnector;
 import io.druid.server.lookup.DataFetcher;
@@ -68,7 +67,7 @@ public class JdbcDataFetcherTest
     Assert.assertEquals(
         0,
         handle.createStatement(
-            String.format(
+            StringUtils.format(
                 "CREATE TABLE %s (%s VARCHAR(64), %s VARCHAR(64))",
                 tableName,
                 keyColumn,
@@ -76,7 +75,7 @@ public class JdbcDataFetcherTest
             )
         ).setQueryTimeout(1).execute()
     );
-    handle.createStatement(String.format("TRUNCATE TABLE %s", tableName)).setQueryTimeout(1).execute();
+    handle.createStatement(StringUtils.format("TRUNCATE TABLE %s", tableName)).setQueryTimeout(1).execute();
 
     for (Map.Entry<String, String> entry : lookupMap.entrySet()) {
       insertValues(entry.getKey(), entry.getValue(), handle);
@@ -101,7 +100,7 @@ public class JdbcDataFetcherTest
   @Test
   public void testFetchAll()
   {
-    ImmutableMap.Builder<String,String> mapBuilder = ImmutableMap.builder();
+    ImmutableMap.Builder<String, String> mapBuilder = ImmutableMap.builder();
     for (Map.Entry<String, String> entry: jdbcDataFetcher.fetchAll()
          ) {
       mapBuilder.put(entry.getKey(), entry.getValue());
@@ -112,9 +111,8 @@ public class JdbcDataFetcherTest
   @Test
   public void testFetchKeys()
   {
-    ImmutableMap.Builder<String,String> mapBuilder = ImmutableMap.builder();
-    for (Map.Entry<String, String> entry: jdbcDataFetcher.fetch(lookupMap.keySet())
-        ) {
+    ImmutableMap.Builder<String, String> mapBuilder = ImmutableMap.builder();
+    for (Map.Entry<String, String> entry: jdbcDataFetcher.fetch(lookupMap.keySet())) {
       mapBuilder.put(entry.getKey(), entry.getValue());
     }
 
@@ -169,9 +167,9 @@ public class JdbcDataFetcherTest
   {
     final String query;
     handle.createStatement(
-        String.format("DELETE FROM %s WHERE %s='%s'", tableName, keyColumn, key)
+        StringUtils.format("DELETE FROM %s WHERE %s='%s'", tableName, keyColumn, key)
     ).setQueryTimeout(1).execute();
-    query = String.format(
+    query = StringUtils.format(
         "INSERT INTO %s (%s, %s) VALUES ('%s', '%s')",
         tableName,
         keyColumn, valueColumn,

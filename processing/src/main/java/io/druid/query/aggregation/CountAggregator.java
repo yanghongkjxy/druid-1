@@ -69,9 +69,9 @@ public class CountAggregator implements Aggregator
   }
 
   @Override
-  public String getName()
+  public double getDouble()
   {
-    throw new UnsupportedOperationException("getName is deprecated");
+    return (double) count;
   }
 
   @Override

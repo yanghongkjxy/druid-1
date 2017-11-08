@@ -23,7 +23,7 @@ import com.google.common.io.Files;
 import com.google.common.primitives.Ints;
 import io.druid.java.util.common.BufferUtils;
 import io.druid.java.util.common.ISE;
-import io.druid.java.util.common.guava.CloseQuietly;
+import io.druid.java.util.common.StringUtils;
 import junit.framework.Assert;
 import org.junit.Rule;
 import org.junit.Test;
@@ -49,9 +49,9 @@ public class SmooshedFileMapperTest
 
     try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21)) {
       for (int i = 0; i < 20; ++i) {
-        File tmpFile = folder.newFile(String.format("smoosh-%s.bin", i));
+        File tmpFile = folder.newFile(StringUtils.format("smoosh-%s.bin", i));
         Files.write(Ints.toByteArray(i), tmpFile);
-        smoosher.add(String.format("%d", i), tmpFile);
+        smoosher.add(StringUtils.format("%d", i), tmpFile);
       }
     }
     validateOutput(baseDir);
@@ -60,63 +60,54 @@ public class SmooshedFileMapperTest
   @Test
   public void testWhenFirstWriterClosedInTheMiddle() throws Exception
   {
-    File baseDir = Files.createTempDir();
-    File[] files = baseDir.listFiles();
-    Assert.assertNotNull(files);
-    Arrays.sort(files);
+    File baseDir = folder.newFolder("base");
 
-    try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21))
-    {
-      final SmooshedWriter writer = smoosher.addWithSmooshedWriter(String.format("%d", 19), 4);
+    try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21)) {
+      final SmooshedWriter writer = smoosher.addWithSmooshedWriter(StringUtils.format("%d", 19), 4);
 
       for (int i = 0; i < 19; ++i) {
-        File tmpFile = File.createTempFile(String.format("smoosh-%s", i), ".bin");
+        File tmpFile = File.createTempFile(StringUtils.format("smoosh-%s", i), ".bin");
         Files.write(Ints.toByteArray(i), tmpFile);
-        smoosher.add(String.format("%d", i), tmpFile);
-        if (i==10)
-        {
+        smoosher.add(StringUtils.format("%d", i), tmpFile);
+        if (i == 10) {
           writer.write(ByteBuffer.wrap(Ints.toByteArray(19)));
-          CloseQuietly.close(writer);
+          writer.close();
         }
         tmpFile.delete();
-      }    
+      }
     }
     validateOutput(baseDir);
   }
 
-  @Test(expected= ISE.class)
+  @Test(expected = ISE.class)
   public void testExceptionForUnClosedFiles() throws Exception
   {
-    File baseDir = Files.createTempDir();
+    File baseDir = folder.newFolder("base");
 
-    try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21))
-    {
+    try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21)) {
       for (int i = 0; i < 19; ++i) {
-        final SmooshedWriter writer = smoosher.addWithSmooshedWriter(String.format("%d", i), 4);
+        final SmooshedWriter writer = smoosher.addWithSmooshedWriter(StringUtils.format("%d", i), 4);
         writer.write(ByteBuffer.wrap(Ints.toByteArray(i)));
       }
-      smoosher.close();
-    }   
+    }
   }
 
   @Test
   public void testWhenFirstWriterClosedAtTheEnd() throws Exception
   {
-    File baseDir = Files.createTempDir();
+    File baseDir = folder.newFolder("base");
 
-    try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21))
-    {
-      final SmooshedWriter writer = smoosher.addWithSmooshedWriter(String.format("%d", 19), 4);
+    try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21)) {
+      final SmooshedWriter writer = smoosher.addWithSmooshedWriter(StringUtils.format("%d", 19), 4);
       writer.write(ByteBuffer.wrap(Ints.toByteArray(19)));
 
       for (int i = 0; i < 19; ++i) {
-        File tmpFile = File.createTempFile(String.format("smoosh-%s", i), ".bin");
+        File tmpFile = File.createTempFile(StringUtils.format("smoosh-%s", i), ".bin");
         Files.write(Ints.toByteArray(i), tmpFile);
-        smoosher.add(String.format("%d", i), tmpFile);
+        smoosher.add(StringUtils.format("%d", i), tmpFile);
         tmpFile.delete();
       }
-      CloseQuietly.close(writer);
-      smoosher.close();
+      writer.close();
     }
     validateOutput(baseDir);
   }
@@ -128,7 +119,7 @@ public class SmooshedFileMapperTest
 
     try (FileSmoosher smoosher = new FileSmoosher(baseDir, 21)) {
       for (int i = 0; i < 20; ++i) {
-        final SmooshedWriter writer = smoosher.addWithSmooshedWriter(String.format("%d", i), 7);
+        final SmooshedWriter writer = smoosher.addWithSmooshedWriter(StringUtils.format("%d", i), 7);
         writer.write(ByteBuffer.wrap(Ints.toByteArray(i)));
         try {
           writer.close();
@@ -152,7 +143,7 @@ public class SmooshedFileMapperTest
 
     try (SmooshedFileMapper mapper = SmooshedFileMapper.load(baseDir)) {
       for (int i = 0; i < 20; ++i) {
-        ByteBuffer buf = mapper.mapFile(String.format("%d", i));
+        ByteBuffer buf = mapper.mapFile(StringUtils.format("%d", i));
         Assert.assertEquals(0, buf.position());
         Assert.assertEquals(4, buf.remaining());
         Assert.assertEquals(4, buf.capacity());
@@ -170,7 +161,8 @@ public class SmooshedFileMapperTest
       boolean exceptionThrown = false;
       try (final SmooshedWriter writer = smoosher.addWithSmooshedWriter("1", 2)) {
         writer.write(ByteBuffer.wrap(Ints.toByteArray(1)));
-      } catch (ISE e) {
+      }
+      catch (ISE e) {
         Assert.assertTrue(e.getMessage().contains("Liar!!!"));
         exceptionThrown = true;
       }
@@ -213,7 +205,7 @@ public class SmooshedFileMapperTest
 
     try (SmooshedFileMapper mapper = SmooshedFileMapper.load(baseDir)) {
       for (int i = 0; i < 20; ++i) {
-        ByteBuffer buf = mapper.mapFile(String.format("%d", i));
+        ByteBuffer buf = mapper.mapFile(StringUtils.format("%d", i));
         Assert.assertEquals(0, buf.position());
         Assert.assertEquals(4, buf.remaining());
         Assert.assertEquals(4, buf.capacity());

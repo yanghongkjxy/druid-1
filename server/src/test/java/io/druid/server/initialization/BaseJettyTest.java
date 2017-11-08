@@ -84,7 +84,7 @@ public abstract class BaseJettyTest
     setProperties();
     Injector injector = setupInjector();
     final DruidNode node = injector.getInstance(Key.get(DruidNode.class, Self.class));
-    port = node.getPort();
+    port = node.getPlaintextPort();
     lifecycle = injector.getInstance(Lifecycle.class);
     lifecycle.start();
     ClientHolder holder = injector.getInstance(ClientHolder.class);
@@ -139,11 +139,10 @@ public abstract class BaseJettyTest
       final ServletContextHandler root = new ServletContextHandler(ServletContextHandler.SESSIONS);
       root.addServlet(new ServletHolder(new DefaultServlet()), "/*");
       JettyServerInitUtils.addExtensionFilters(root, injector);
-      root.addFilter(JettyServerInitUtils.defaultGzipFilterHolder(), "/*", null);
       root.addFilter(GuiceFilter.class, "/*", null);
 
       final HandlerList handlerList = new HandlerList();
-      handlerList.setHandlers(new Handler[]{root});
+      handlerList.setHandlers(new Handler[]{JettyServerInitUtils.wrapWithDefaultGzipHandler(root)});
       server.setHandler(handlerList);
     }
 

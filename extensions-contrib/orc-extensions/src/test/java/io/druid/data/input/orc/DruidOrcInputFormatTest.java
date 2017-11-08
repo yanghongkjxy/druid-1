@@ -1,25 +1,28 @@
 /*
  * Licensed to Metamarkets Group Inc. (Metamarkets) under one
- * or more contributor license agreements.  See the NOTICE file
+ * or more contributor license agreements. See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership.  Metamarkets licenses this file
+ * regarding copyright ownership. Metamarkets licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * with the License. You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
+ * KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations
  * under the License.
  */
 package io.druid.data.input.orc;
 
 import io.druid.data.input.MapBasedInputRow;
+import io.druid.data.input.impl.InputRowParser;
 import io.druid.indexer.HadoopDruidIndexerConfig;
+import io.druid.java.util.common.DateTimes;
+import io.druid.java.util.common.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.vector.BytesColumnVector;
@@ -40,7 +43,6 @@ import org.apache.orc.CompressionKind;
 import org.apache.orc.OrcFile;
 import org.apache.orc.TypeDescription;
 import org.apache.orc.Writer;
-import org.joda.time.DateTime;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -89,7 +91,7 @@ public class DruidOrcInputFormatTest
 
     TaskAttemptContext context = new TaskAttemptContextImpl(job.getConfiguration(), new TaskAttemptID());
     RecordReader reader = inputFormat.createRecordReader(split, context);
-    OrcHadoopInputRowParser parser = (OrcHadoopInputRowParser)config.getParser();
+    InputRowParser<OrcStruct> parser = (InputRowParser<OrcStruct>) config.getParser();
 
     reader.initialize(split, context);
 
@@ -97,10 +99,10 @@ public class DruidOrcInputFormatTest
 
     OrcStruct data = (OrcStruct) reader.getCurrentValue();
 
-    MapBasedInputRow row = (MapBasedInputRow)parser.parse(data);
+    MapBasedInputRow row = (MapBasedInputRow) parser.parse(data);
 
     Assert.assertTrue(row.getEvent().keySet().size() == 4);
-    Assert.assertEquals(new DateTime(timestamp), row.getTimestamp());
+    Assert.assertEquals(DateTimes.of(timestamp), row.getTimestamp());
     Assert.assertEquals(parser.getParseSpec().getDimensionsSpec().getDimensionNames(), row.getDimensions());
     Assert.assertEquals(col1, row.getEvent().get("col1"));
     Assert.assertEquals(Arrays.asList(col2), row.getDimension("col2"));
@@ -129,15 +131,24 @@ public class DruidOrcInputFormatTest
     );
     VectorizedRowBatch batch = schema.createRowBatch();
     batch.size = 1;
-    ((BytesColumnVector) batch.cols[0]).setRef(0, timestamp.getBytes(), 0, timestamp.length());
-    ((BytesColumnVector) batch.cols[1]).setRef(0, col1.getBytes(), 0, col1.length());
+    ((BytesColumnVector) batch.cols[0]).setRef(
+        0,
+        StringUtils.toUtf8(timestamp),
+        0,
+        timestamp.length()
+    );
+    ((BytesColumnVector) batch.cols[1]).setRef(0, StringUtils.toUtf8(col1), 0, col1.length());
 
     ListColumnVector listColumnVector = (ListColumnVector) batch.cols[2];
     listColumnVector.childCount = col2.length;
     listColumnVector.lengths[0] = 3;
-    for (int idx = 0; idx < col2.length; idx++)
-    {
-      ((BytesColumnVector) listColumnVector.child).setRef(idx, col2[idx].getBytes(), 0, col2[idx].length());
+    for (int idx = 0; idx < col2.length; idx++) {
+      ((BytesColumnVector) listColumnVector.child).setRef(
+          idx,
+          StringUtils.toUtf8(col2[idx]),
+          0,
+          col2[idx].length()
+      );
     }
 
     ((DoubleColumnVector) batch.cols[3]).vector[0] = val1;

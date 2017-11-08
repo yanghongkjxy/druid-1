@@ -20,14 +20,12 @@
 package io.druid.benchmark.indexing;
 
 import com.google.common.collect.Lists;
-import com.google.common.hash.Hashing;
-
 import io.druid.benchmark.datagen.BenchmarkDataGenerator;
 import io.druid.benchmark.datagen.BenchmarkSchemaInfo;
 import io.druid.benchmark.datagen.BenchmarkSchemas;
 import io.druid.data.input.InputRow;
-import io.druid.data.input.impl.DimensionsSpec;
-import io.druid.granularity.QueryGranularities;
+import io.druid.hll.HyperLogLogHash;
+import io.druid.java.util.common.granularity.Granularities;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
 import io.druid.java.util.common.logger.Logger;
@@ -42,14 +40,14 @@ import io.druid.query.filter.OrDimFilter;
 import io.druid.query.filter.RegexDimFilter;
 import io.druid.query.filter.SearchQueryDimFilter;
 import io.druid.query.ordering.StringComparators;
-import io.druid.query.search.search.ContainsSearchQuerySpec;
+import io.druid.query.search.ContainsSearchQuerySpec;
 import io.druid.segment.Cursor;
 import io.druid.segment.DimensionSelector;
+import io.druid.segment.VirtualColumns;
 import io.druid.segment.data.IndexedInts;
 import io.druid.segment.incremental.IncrementalIndex;
 import io.druid.segment.incremental.IncrementalIndexSchema;
 import io.druid.segment.incremental.IncrementalIndexStorageAdapter;
-import io.druid.segment.incremental.OnheapIncrementalIndex;
 import io.druid.segment.serde.ComplexMetrics;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -67,11 +65,12 @@ import org.openjdk.jmh.infra.Blackhole;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @State(Scope.Benchmark)
-@Fork(jvmArgsPrepend = "-server", value = 1)
+@Fork(value = 1)
 @Warmup(iterations = 10)
 @Measurement(iterations = 25)
 public class IncrementalIndexReadBenchmark
@@ -97,7 +96,7 @@ public class IncrementalIndexReadBenchmark
     log.info("SETUP CALLED AT " + +System.currentTimeMillis());
 
     if (ComplexMetrics.getSerdeForType("hyperUnique") == null) {
-      ComplexMetrics.registerSerde("hyperUnique", new HyperUniquesSerde(Hashing.murmur3_128()));
+      ComplexMetrics.registerSerde("hyperUnique", new HyperUniquesSerde(HyperLogLogHash.getDefault()));
     }
 
     schemaInfo = BenchmarkSchemas.SCHEMA_MAP.get(schema);
@@ -123,18 +122,16 @@ public class IncrementalIndexReadBenchmark
 
   private IncrementalIndex makeIncIndex()
   {
-    return new OnheapIncrementalIndex(
-        new IncrementalIndexSchema.Builder()
-            .withQueryGranularity(QueryGranularities.NONE)
-            .withMetrics(schemaInfo.getAggsArray())
-            .withDimensionsSpec(new DimensionsSpec(null, null, null))
-            .withRollup(rollup)
-            .build(),
-        true,
-        false,
-        true,
-        rowsPerSegment
-    );
+    return new IncrementalIndex.Builder()
+        .setIndexSchema(
+            new IncrementalIndexSchema.Builder()
+                .withMetrics(schemaInfo.getAggsArray())
+                .withRollup(rollup)
+                .build()
+        )
+        .setReportParseExceptions(false)
+        .setMaxRowCount(rowsPerSegment)
+        .buildOnheap();
   }
 
   @Benchmark
@@ -143,14 +140,14 @@ public class IncrementalIndexReadBenchmark
   public void read(Blackhole blackhole) throws Exception
   {
     IncrementalIndexStorageAdapter sa = new IncrementalIndexStorageAdapter(incIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(null, schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, null);
     Cursor cursor = Sequences.toList(Sequences.limit(cursors, 1), Lists.<Cursor>newArrayList()).get(0);
 
     List<DimensionSelector> selectors = new ArrayList<>();
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimSequential", null)));
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimZipf", null)));
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimUniform", null)));
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimSequentialHalfNull", null)));
+    selectors.add(makeDimensionSelector(cursor, "dimSequential"));
+    selectors.add(makeDimensionSelector(cursor, "dimZipf"));
+    selectors.add(makeDimensionSelector(cursor, "dimUniform"));
+    selectors.add(makeDimensionSelector(cursor, "dimSequentialHalfNull"));
 
     cursor.reset();
     while (!cursor.isDone()) {
@@ -170,22 +167,22 @@ public class IncrementalIndexReadBenchmark
     DimFilter filter = new OrDimFilter(
         Arrays.asList(
             new BoundDimFilter("dimSequential", "-1", "-1", true, true, null, null, StringComparators.ALPHANUMERIC),
-            new JavaScriptDimFilter("dimSequential", "function(x) { return false }", null, JavaScriptConfig.getDefault()),
+            new JavaScriptDimFilter("dimSequential", "function(x) { return false }", null, JavaScriptConfig.getEnabledInstance()),
             new RegexDimFilter("dimSequential", "X", null),
             new SearchQueryDimFilter("dimSequential", new ContainsSearchQuerySpec("X", false), null),
-            new InDimFilter("dimSequential", Arrays.asList("X"), null)
+            new InDimFilter("dimSequential", Collections.singletonList("X"), null)
         )
     );
 
     IncrementalIndexStorageAdapter sa = new IncrementalIndexStorageAdapter(incIndex);
-    Sequence<Cursor> cursors = sa.makeCursors(filter.toFilter(), schemaInfo.getDataInterval(), QueryGranularities.ALL, false);
+    Sequence<Cursor> cursors = makeCursors(sa, filter);
     Cursor cursor = Sequences.toList(Sequences.limit(cursors, 1), Lists.<Cursor>newArrayList()).get(0);
 
     List<DimensionSelector> selectors = new ArrayList<>();
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimSequential", null)));
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimZipf", null)));
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimUniform", null)));
-    selectors.add(cursor.makeDimensionSelector(new DefaultDimensionSpec("dimSequentialHalfNull", null)));
+    selectors.add(makeDimensionSelector(cursor, "dimSequential"));
+    selectors.add(makeDimensionSelector(cursor, "dimZipf"));
+    selectors.add(makeDimensionSelector(cursor, "dimUniform"));
+    selectors.add(makeDimensionSelector(cursor, "dimSequentialHalfNull"));
 
     cursor.reset();
     while (!cursor.isDone()) {
@@ -195,5 +192,22 @@ public class IncrementalIndexReadBenchmark
       }
       cursor.advance();
     }
+  }
+
+  private Sequence<Cursor> makeCursors(IncrementalIndexStorageAdapter sa, DimFilter filter)
+  {
+    return sa.makeCursors(
+        filter.toFilter(),
+        schemaInfo.getDataInterval(),
+        VirtualColumns.EMPTY,
+        Granularities.ALL,
+        false,
+        null
+    );
+  }
+
+  private static DimensionSelector makeDimensionSelector(Cursor cursor, String name)
+  {
+    return cursor.getColumnSelectorFactory().makeDimensionSelector(new DefaultDimensionSpec(name, null));
   }
 }

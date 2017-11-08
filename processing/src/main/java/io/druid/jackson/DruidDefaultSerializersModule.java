@@ -29,7 +29,6 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.google.common.base.Throwables;
-import io.druid.java.util.common.Granularity;
 import io.druid.java.util.common.guava.Accumulator;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Yielder;
@@ -48,18 +47,7 @@ public class DruidDefaultSerializersModule extends SimpleModule
     super("Druid default serializers");
 
     JodaStuff.register(this);
-    addDeserializer(
-        Granularity.class,
-        new JsonDeserializer<Granularity>()
-        {
-          @Override
-          public Granularity deserialize(JsonParser jp, DeserializationContext ctxt)
-              throws IOException
-          {
-            return Granularity.valueOf(jp.getText().toUpperCase());
-          }
-        }
-    );
+
     addDeserializer(
         DateTimeZone.class,
         new JsonDeserializer<DateTimeZone>()
@@ -71,7 +59,8 @@ public class DruidDefaultSerializersModule extends SimpleModule
             String tzId = jp.getText();
             try {
               return DateTimeZone.forID(tzId);
-            } catch(IllegalArgumentException e) {
+            }
+            catch (IllegalArgumentException e) {
               // also support Java timezone strings
               return DateTimeZone.forTimeZone(TimeZone.getTimeZone(tzId));
             }
@@ -140,7 +129,8 @@ public class DruidDefaultSerializersModule extends SimpleModule
                 yielder = yielder.next(null);
               }
               jgen.writeEndArray();
-            } finally {
+            }
+            finally {
               yielder.close();
             }
           }

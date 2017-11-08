@@ -21,7 +21,9 @@ package io.druid.segment.data;
 
 import com.google.common.base.Supplier;
 import io.druid.collections.ResourceHolder;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.guava.CloseQuietly;
+import io.druid.java.util.common.io.smoosh.SmooshedFileMapper;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -36,14 +38,24 @@ public class BlockLayoutIndexedLongSupplier implements Supplier<IndexedLongs>
   private final CompressionFactory.LongEncodingReader baseReader;
 
   public BlockLayoutIndexedLongSupplier(
-      int totalSize, int sizePer, ByteBuffer fromBuffer, ByteOrder order,
+      int totalSize,
+      int sizePer,
+      ByteBuffer fromBuffer,
+      ByteOrder order,
       CompressionFactory.LongEncodingReader reader,
-      CompressedObjectStrategy.CompressionStrategy strategy
+      CompressedObjectStrategy.CompressionStrategy strategy,
+      SmooshedFileMapper fileMapper
   )
   {
-    baseLongBuffers = GenericIndexed.read(fromBuffer, VSizeCompressedObjectStrategy.getBufferForOrder(
-        order, strategy, reader.getNumBytes(sizePer)
-    ));
+    baseLongBuffers = GenericIndexed.read(
+        fromBuffer,
+        VSizeCompressedObjectStrategy.getBufferForOrder(
+            order,
+            strategy,
+            reader.getNumBytes(sizePer)
+        ),
+        fileMapper
+    );
     this.totalSize = totalSize;
     this.sizePer = sizePer;
     this.baseReader = reader;
@@ -76,6 +88,7 @@ public class BlockLayoutIndexedLongSupplier implements Supplier<IndexedLongs>
             return longBuffer.get(longBuffer.position() + bufferIndex);
           }
 
+          @Override
           protected void loadBuffer(int bufferNum)
           {
             CloseQuietly.close(holder);
@@ -142,7 +155,7 @@ public class BlockLayoutIndexedLongSupplier implements Supplier<IndexedLongs>
     {
       if (totalSize - index < toFill.length) {
         throw new IndexOutOfBoundsException(
-            String.format(
+            StringUtils.format(
                 "Cannot fill array of size[%,d] at index[%,d].  Max size[%,d]", toFill.length, index, totalSize
             )
         );

@@ -20,14 +20,14 @@
 package io.druid.segment;
 
 import io.druid.java.util.common.IAE;
+import io.druid.java.util.common.io.smoosh.SmooshedFileMapper;
+import io.druid.query.monomorphicprocessing.RuntimeShapeInspector;
 import io.druid.segment.data.CompressedObjectStrategy;
 import io.druid.segment.data.CompressedVSizeIntsIndexedSupplier;
 import io.druid.segment.data.IndexedInts;
-import io.druid.segment.data.IndexedIntsIterator;
 import io.druid.segment.data.IndexedIterable;
 import io.druid.segment.data.IndexedMultivalue;
 import io.druid.segment.data.WritableSupplier;
-import it.unimi.dsi.fastutil.ints.IntIterator;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -64,11 +64,13 @@ public class CompressedVSizeIndexedSupplier implements WritableSupplier<IndexedM
     this.valueSupplier = valueSupplier;
   }
 
+  @Override
   public long getSerializedSize()
   {
     return 1 + offsetSupplier.getSerializedSize() + valueSupplier.getSerializedSize();
   }
 
+  @Override
   public void writeToChannel(WritableByteChannel channel) throws IOException
   {
     channel.write(ByteBuffer.wrap(new byte[]{version}));
@@ -76,18 +78,20 @@ public class CompressedVSizeIndexedSupplier implements WritableSupplier<IndexedM
     valueSupplier.writeToChannel(channel);
   }
 
-  public static CompressedVSizeIndexedSupplier fromByteBuffer(ByteBuffer buffer, ByteOrder order)
+  public static CompressedVSizeIndexedSupplier fromByteBuffer(ByteBuffer buffer, ByteOrder order, SmooshedFileMapper fileMapper)
   {
     byte versionFromBuffer = buffer.get();
 
     if (versionFromBuffer == version) {
       CompressedVSizeIntsIndexedSupplier offsetSupplier = CompressedVSizeIntsIndexedSupplier.fromByteBuffer(
           buffer,
-          order
+          order,
+          fileMapper
       );
       CompressedVSizeIntsIndexedSupplier valueSupplier = CompressedVSizeIntsIndexedSupplier.fromByteBuffer(
           buffer,
-          order
+          order,
+          fileMapper
       );
       return new CompressedVSizeIndexedSupplier(offsetSupplier, valueSupplier);
     }
@@ -189,15 +193,9 @@ public class CompressedVSizeIndexedSupplier implements WritableSupplier<IndexedM
         public int get(int index)
         {
           if (index >= size) {
-            throw new IllegalArgumentException(String.format("Index[%s] >= size[%s]", index, size));
+            throw new IAE("Index[%d] >= size[%d]", index, size);
           }
           return values.get(index + offset);
-        }
-
-        @Override
-        public void fill(int index, int[] toFill)
-        {
-          throw new UnsupportedOperationException("fill not supported");
         }
 
         @Override
@@ -207,9 +205,9 @@ public class CompressedVSizeIndexedSupplier implements WritableSupplier<IndexedM
         }
 
         @Override
-        public IntIterator iterator()
+        public void inspectRuntimeShape(RuntimeShapeInspector inspector)
         {
-          return new IndexedIntsIterator(this);
+          inspector.visit("values", values);
         }
       };
     }
@@ -226,6 +224,12 @@ public class CompressedVSizeIndexedSupplier implements WritableSupplier<IndexedM
       return IndexedIterable.create(this).iterator();
     }
 
+    @Override
+    public void inspectRuntimeShape(RuntimeShapeInspector inspector)
+    {
+      inspector.visit("offsets", offsets);
+      inspector.visit("values", values);
+    }
   }
 
 }

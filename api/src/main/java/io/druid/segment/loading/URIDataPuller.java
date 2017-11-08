@@ -1,25 +1,26 @@
 /*
-* Licensed to Metamarkets Group Inc. (Metamarkets) under one
-* or more contributor license agreements. See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership. Metamarkets licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License. You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing,
-* software distributed under the License is distributed on an
-* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-* KIND, either express or implied. See the License for the
-* specific language governing permissions and limitations
-* under the License.
-*/
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
 
 package io.druid.segment.loading;
 
 import com.google.common.base.Predicate;
+import io.druid.guice.annotations.ExtensionPoint;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -28,6 +29,7 @@ import java.net.URI;
 /**
  * A URIDataPuller has handlings for URI based data
  */
+@ExtensionPoint
 public interface URIDataPuller
 {
   /**
@@ -39,7 +41,7 @@ public interface URIDataPuller
    *
    * @throws IOException
    */
-  public InputStream getInputStream(URI uri) throws IOException;
+  InputStream getInputStream(URI uri) throws IOException;
 
   /**
    * Returns an abstract "version" for the URI. The exact meaning of the version is left up to the implementation.
@@ -50,7 +52,7 @@ public interface URIDataPuller
    *
    * @throws IOException on error
    */
-  public String getVersion(URI uri) throws IOException;
+  String getVersion(URI uri) throws IOException;
 
   /**
    * Evaluates a Throwable to see if it is recoverable. This is expected to be used in conjunction with the other methods
@@ -58,5 +60,5 @@ public interface URIDataPuller
    *
    * @return Predicate function indicating if the Throwable is recoverable
    */
-  public Predicate<Throwable> shouldRetryPredicate();
+  Predicate<Throwable> shouldRetryPredicate();
 }

@@ -19,8 +19,7 @@
 
 package io.druid.segment.data;
 
-import it.unimi.dsi.fastutil.ints.IntIterator;
-import it.unimi.dsi.fastutil.ints.IntIterators;
+import io.druid.query.monomorphicprocessing.RuntimeShapeInspector;
 
 import java.io.IOException;
 
@@ -47,20 +46,13 @@ public class EmptyIndexedInts implements IndexedInts
   }
 
   @Override
-  public IntIterator iterator()
-  {
-    return IntIterators.EMPTY_ITERATOR;
-  }
-
-  @Override
-  public void fill(int index, int[] toFill)
-  {
-    throw new UnsupportedOperationException("fill not supported");
-  }
-
-  @Override
   public void close() throws IOException
   {
+  }
 
+  @Override
+  public void inspectRuntimeShape(RuntimeShapeInspector inspector)
+  {
+    // nothing to inspect
   }
 }

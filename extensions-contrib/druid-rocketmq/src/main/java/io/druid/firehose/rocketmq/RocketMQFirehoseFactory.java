@@ -34,14 +34,16 @@ import com.alibaba.rocketmq.remoting.exception.RemotingException;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.Sets;
-
-import io.druid.data.input.ByteBufferInputRowParser;
 import io.druid.data.input.Firehose;
 import io.druid.data.input.FirehoseFactory;
 import io.druid.data.input.InputRow;
+import io.druid.data.input.impl.InputRowParser;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.java.util.common.parsers.ParseException;
 
+import javax.annotation.Nullable;
+import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -56,7 +58,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CountDownLatch;
 
-public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputRowParser>
+public class RocketMQFirehoseFactory implements FirehoseFactory<InputRowParser<ByteBuffer>>
 {
 
   private static final Logger LOGGER = new Logger(RocketMQFirehoseFactory.class);
@@ -127,7 +129,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
   private boolean hasMessagesPending()
   {
 
-    for (ConcurrentHashMap.Entry<MessageQueue, ConcurrentSkipListSet<MessageExt>> entry : messageQueueTreeSetMap.entrySet()) {
+    for (Map.Entry<MessageQueue, ConcurrentSkipListSet<MessageExt>> entry : messageQueueTreeSetMap.entrySet()) {
       if (!entry.getValue().isEmpty()) {
         return true;
       }
@@ -137,7 +139,10 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
   }
 
   @Override
-  public Firehose connect(ByteBufferInputRowParser byteBufferInputRowParser) throws IOException, ParseException
+  public Firehose connect(
+      InputRowParser<ByteBuffer> byteBufferInputRowParser,
+      File temporaryDirectory
+  ) throws IOException, ParseException
   {
 
     Set<String> newDimExclus = Sets.union(
@@ -145,7 +150,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
         Sets.newHashSet("feed")
     );
 
-    final ByteBufferInputRowParser theParser = byteBufferInputRowParser.withParseSpec(
+    final InputRowParser<ByteBuffer> theParser = byteBufferInputRowParser.withParseSpec(
         byteBufferInputRowParser.getParseSpec()
                                 .withDimensionsSpec(
                                     byteBufferInputRowParser.getParseSpec()
@@ -187,7 +192,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
       pullMessageService.start();
     }
     catch (MQClientException e) {
-      LOGGER.error("Failed to start DefaultMQPullConsumer", e);
+      LOGGER.error(e, "Failed to start DefaultMQPullConsumer");
       throw new IOException("Failed to start RocketMQ client", e);
     }
 
@@ -202,8 +207,8 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
 
         for (Map.Entry<String, Set<MessageQueue>> entry : topicQueueMap.entrySet()) {
           for (MessageQueue messageQueue : entry.getValue()) {
-            if (messageQueueTreeSetMap.keySet().contains(messageQueue)
-                && !messageQueueTreeSetMap.get(messageQueue).isEmpty()) {
+            ConcurrentSkipListSet<MessageExt> messages = messageQueueTreeSetMap.get(messageQueue);
+            if (messages != null && !messages.isEmpty()) {
               hasMore = true;
             } else {
               try {
@@ -224,7 +229,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
                 }
               }
               catch (MQClientException e) {
-                LOGGER.error("Failed to fetch consume offset for queue: {}", entry.getKey());
+                LOGGER.error("Failed to fetch consume offset for queue: %s", entry.getKey());
               }
             }
           }
@@ -237,12 +242,13 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
             hasMore = true;
           }
           catch (InterruptedException e) {
-            LOGGER.error("CountDownLatch await got interrupted", e);
+            LOGGER.error(e, "CountDownLatch await got interrupted");
           }
         }
         return hasMore;
       }
 
+      @Nullable
       @Override
       public InputRow nextRow()
       {
@@ -251,10 +257,9 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
             MessageExt message = entry.getValue().pollFirst();
             InputRow inputRow = theParser.parse(ByteBuffer.wrap(message.getBody()));
 
-            if (!windows.keySet().contains(entry.getKey())) {
-              windows.put(entry.getKey(), new ConcurrentSkipListSet<Long>());
-            }
-            windows.get(entry.getKey()).add(message.getQueueOffset());
+            windows
+                .computeIfAbsent(entry.getKey(), k -> new ConcurrentSkipListSet<>())
+                .add(message.getQueueOffset());
             return inputRow;
           }
         }
@@ -274,7 +279,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
             OffsetStore offsetStore = defaultMQPullConsumer.getOffsetStore();
             Set<MessageQueue> updated = new HashSet<>();
             // calculate offsets according to consuming windows.
-            for (ConcurrentHashMap.Entry<MessageQueue, ConcurrentSkipListSet<Long>> entry : windows.entrySet()) {
+            for (Map.Entry<MessageQueue, ConcurrentSkipListSet<Long>> entry : windows.entrySet()) {
               while (!entry.getValue().isEmpty()) {
 
                 long offset = offsetStore.readOffset(entry.getKey(), ReadOffsetType.MEMORY_FIRST_THEN_STORE);
@@ -308,7 +313,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
   /**
    * Pull request.
    */
-  final class DruidPullRequest
+  static final class DruidPullRequest
   {
     private final MessageQueue messageQueue;
     private final String tag;
@@ -434,13 +439,9 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
           switch (pullResult.getPullStatus()) {
             case FOUND:
               // Handle pull result.
-              if (!messageQueueTreeSetMap.keySet().contains(pullRequest.getMessageQueue())) {
-                messageQueueTreeSetMap.putIfAbsent(
-                    pullRequest.getMessageQueue(),
-                    new ConcurrentSkipListSet<>(new MessageComparator())
-                );
-              }
-              messageQueueTreeSetMap.get(pullRequest.getMessageQueue()).addAll(pullResult.getMsgFoundList());
+              messageQueueTreeSetMap
+                  .computeIfAbsent(pullRequest.getMessageQueue(), k -> new ConcurrentSkipListSet<>(MESSAGE_COMPARATOR))
+                  .addAll(pullResult.getMsgFoundList());
               break;
 
             case NO_NEW_MSG:
@@ -449,7 +450,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
 
             case OFFSET_ILLEGAL:
               LOGGER.error(
-                  "Bad Pull Request: Offset is illegal. Offset used: {}",
+                  "Bad Pull Request: Offset is illegal. Offset used: %d",
                   pullRequest.getNextBeginOffset()
               );
               break;
@@ -459,7 +460,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
           }
         }
         catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
-          LOGGER.error("Failed to pull message from broker.", e);
+          LOGGER.error(e, "Failed to pull message from broker.");
         }
         finally {
           pullRequest.getCountDownLatch().countDown();
@@ -486,7 +487,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
         Thread.sleep(10);
       }
       catch (InterruptedException e) {
-        LOGGER.error("", e);
+        LOGGER.error(e, "");
       }
 
       synchronized (this) {
@@ -508,14 +509,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
   /**
    * Compare messages pulled from same message queue according to queue offset.
    */
-  static final class MessageComparator implements Comparator<MessageExt>
-  {
-    @Override
-    public int compare(MessageExt lhs, MessageExt rhs)
-    {
-      return Long.compare(lhs.getQueueOffset(), lhs.getQueueOffset());
-    }
-  }
+  private static final Comparator<MessageExt> MESSAGE_COMPARATOR = Comparator.comparingLong(MessageExt::getQueueOffset);
 
 
   /**
@@ -548,7 +542,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
         topicQueueMap.put(topic, mqDivided);
 
         // Remove message queues that are re-assigned to other clients.
-        Iterator<ConcurrentHashMap.Entry<MessageQueue, ConcurrentSkipListSet<MessageExt>>> it =
+        Iterator<Map.Entry<MessageQueue, ConcurrentSkipListSet<MessageExt>>> it =
             messageQueueTreeSetMap.entrySet().iterator();
         while (it.hasNext()) {
           if (!mqDivided.contains(it.next().getKey())) {
@@ -565,7 +559,7 @@ public class RocketMQFirehoseFactory implements FirehoseFactory<ByteBufferInputR
         }
 
         if (LOGGER.isDebugEnabled() && stringBuilder.length() > 2) {
-          LOGGER.debug(String.format(
+          LOGGER.debug(StringUtils.format(
               "%s@%s is consuming the following message queues: %s",
               defaultMQPullConsumer.getClientIP(),
               defaultMQPullConsumer.getInstanceName(),

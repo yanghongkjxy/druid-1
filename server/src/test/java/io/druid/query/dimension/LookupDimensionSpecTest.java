@@ -27,6 +27,7 @@ import io.druid.jackson.DefaultObjectMapper;
 import io.druid.query.extraction.ExtractionFn;
 import io.druid.query.extraction.MapLookupExtractor;
 import io.druid.query.lookup.LookupExtractor;
+import io.druid.query.lookup.LookupExtractorFactoryContainer;
 import io.druid.query.lookup.LookupReferencesManager;
 import io.druid.query.lookup.MapLookupExtractorFactory;
 import junitparams.JUnitParamsRunner;
@@ -50,7 +51,11 @@ public class LookupDimensionSpecTest
   private static final LookupReferencesManager LOOKUP_REF_MANAGER = EasyMock.createMock(LookupReferencesManager.class);
 
   static {
-    EasyMock.expect(LOOKUP_REF_MANAGER.get(EasyMock.eq("lookupName"))).andReturn(new MapLookupExtractorFactory(STRING_MAP, false)
+    EasyMock.expect(LOOKUP_REF_MANAGER.get(EasyMock.eq("lookupName"))).andReturn(
+        new LookupExtractorFactoryContainer(
+            "v0",
+            new MapLookupExtractorFactory(STRING_MAP, false)
+        )
     ).anyTimes();
     EasyMock.replay(LOOKUP_REF_MANAGER);
   }
@@ -70,7 +75,7 @@ public class LookupDimensionSpecTest
         LOOKUP_REF_MANAGER
     );
     String serLookup = mapper.writeValueAsString(lookupDimSpec);
-    Assert.assertEquals(lookupDimSpec, mapper.reader(DimensionSpec.class).with(injectableValues).readValue(serLookup));
+    Assert.assertEquals(lookupDimSpec, mapper.reader(LookupDimensionSpec.class).with(injectableValues).readValue(serLookup));
   }
 
   private Object[] parametersForTestSerDesr()
@@ -154,8 +159,7 @@ public class LookupDimensionSpecTest
   @Parameters
   public void testApply(DimensionSpec dimensionSpec, Map<String, String> map)
   {
-    for (Map.Entry<String, String> entry : map.entrySet()
-        ) {
+    for (Map.Entry<String, String> entry : map.entrySet()) {
       Assert.assertEquals(Strings.emptyToNull(entry.getValue()), dimensionSpec.getExtractionFn().apply(entry.getKey()));
     }
   }

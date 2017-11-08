@@ -19,6 +19,7 @@
 
 package io.druid.query.aggregation;
 
+import com.google.common.base.Predicate;
 import com.google.common.collect.Lists;
 import io.druid.js.JavaScriptConfig;
 import io.druid.query.dimension.DimensionSpec;
@@ -34,14 +35,15 @@ import io.druid.query.filter.OrDimFilter;
 import io.druid.query.filter.RegexDimFilter;
 import io.druid.query.filter.SearchQueryDimFilter;
 import io.druid.query.filter.SelectorDimFilter;
+import io.druid.query.filter.ValueMatcher;
+import io.druid.query.monomorphicprocessing.RuntimeShapeInspector;
 import io.druid.query.ordering.StringComparators;
-import io.druid.query.search.search.ContainsSearchQuerySpec;
+import io.druid.query.search.ContainsSearchQuerySpec;
 import io.druid.segment.ColumnSelectorFactory;
+import io.druid.segment.ColumnValueSelector;
 import io.druid.segment.DimensionSelector;
-import io.druid.segment.FloatColumnSelector;
-import io.druid.segment.LongColumnSelector;
-import io.druid.segment.NumericColumnSelector;
-import io.druid.segment.ObjectColumnSelector;
+import io.druid.segment.DimensionSelectorUtils;
+import io.druid.segment.IdLookup;
 import io.druid.segment.column.ColumnCapabilities;
 import io.druid.segment.column.ColumnCapabilitiesImpl;
 import io.druid.segment.column.ValueType;
@@ -50,6 +52,7 @@ import io.druid.segment.data.IndexedInts;
 import org.junit.Assert;
 import org.junit.Test;
 
+import javax.annotation.Nullable;
 import java.util.Arrays;
 
 public class FilteredAggregatorTest
@@ -71,9 +74,7 @@ public class FilteredAggregatorTest
         new SelectorDimFilter("dim", "a", null)
     );
 
-    FilteredAggregator agg = (FilteredAggregator) factory.factorize(
-     makeColumnSelector(selector)
-    );
+    FilteredAggregator agg = (FilteredAggregator) factory.factorize(makeColumnSelector(selector));
 
     double expectedFirst = new Float(values[0]).doubleValue();
     double expectedSecond = new Float(values[1]).doubleValue() + expectedFirst;
@@ -82,7 +83,8 @@ public class FilteredAggregatorTest
     assertValues(agg, selector, expectedFirst, expectedSecond, expectedThird);
   }
 
-  private ColumnSelectorFactory makeColumnSelector(final TestFloatColumnSelector selector){
+  private ColumnSelectorFactory makeColumnSelector(final TestFloatColumnSelector selector)
+  {
 
     return new ColumnSelectorFactory()
     {
@@ -100,10 +102,22 @@ public class FilteredAggregatorTest
                 public IndexedInts getRow()
                 {
                   if (selector.getIndex() % 3 == 2) {
-                    return new ArrayBasedIndexedInts(new int[]{1});
+                    return ArrayBasedIndexedInts.of(new int[]{1});
                   } else {
-                    return new ArrayBasedIndexedInts(new int[]{0});
+                    return ArrayBasedIndexedInts.of(new int[]{0});
                   }
+                }
+
+                @Override
+                public ValueMatcher makeValueMatcher(String value)
+                {
+                  return DimensionSelectorUtils.makeValueMatcherGeneric(this, value);
+                }
+
+                @Override
+                public ValueMatcher makeValueMatcher(Predicate<String> predicate)
+                {
+                  return DimensionSelectorUtils.makeValueMatcherGeneric(this, predicate);
                 }
 
                 @Override
@@ -126,16 +140,49 @@ public class FilteredAggregatorTest
                 }
 
                 @Override
-                public int lookupId(String name)
+                public boolean nameLookupPossibleInAdvance()
                 {
-                  switch (name) {
-                    case "a":
-                      return 0;
-                    case "b":
-                      return 1;
-                    default:
-                      throw new IllegalArgumentException();
-                  }
+                  return true;
+                }
+
+                @Nullable
+                @Override
+                public IdLookup idLookup()
+                {
+                  return new IdLookup()
+                  {
+                    @Override
+                    public int lookupId(String name)
+                    {
+                      switch (name) {
+                        case "a":
+                          return 0;
+                        case "b":
+                          return 1;
+                        default:
+                          throw new IllegalArgumentException();
+                      }
+                    }
+                  };
+                }
+
+                @Nullable
+                @Override
+                public Object getObject()
+                {
+                  return defaultGetObject();
+                }
+
+                @Override
+                public Class classOfObject()
+                {
+                  return Object.class;
+                }
+
+                @Override
+                public void inspectRuntimeShape(RuntimeShapeInspector inspector)
+                {
+                  // Don't care about runtime shape in tests
                 }
               }
           );
@@ -145,25 +192,13 @@ public class FilteredAggregatorTest
       }
 
       @Override
-      public LongColumnSelector makeLongColumnSelector(String columnName)
-      {
-        throw new UnsupportedOperationException();
-      }
-
-      @Override
-      public FloatColumnSelector makeFloatColumnSelector(String columnName)
+      public ColumnValueSelector<?> makeColumnValueSelector(String columnName)
       {
         if (columnName.equals("value")) {
           return selector;
         } else {
           throw new UnsupportedOperationException();
         }
-      }
-
-      @Override
-      public ObjectColumnSelector makeObjectColumnSelector(String columnName)
-      {
-        throw new UnsupportedOperationException();
       }
 
       @Override
@@ -183,20 +218,15 @@ public class FilteredAggregatorTest
         }
         return caps;
       }
-
-      @Override
-      public NumericColumnSelector makeMathExpressionSelector(String expression)
-      {
-        throw new UnsupportedOperationException();
-      }
     };
   }
 
-  private void assertValues(FilteredAggregator agg,TestFloatColumnSelector selector, double... expectedVals){
+  private void assertValues(FilteredAggregator agg, TestFloatColumnSelector selector, double... expectedVals)
+  {
     Assert.assertEquals(0.0d, agg.get());
     Assert.assertEquals(0.0d, agg.get());
     Assert.assertEquals(0.0d, agg.get());
-    for(double expectedVal : expectedVals){
+    for (double expectedVal : expectedVals) {
       aggregate(selector, agg);
       Assert.assertEquals(expectedVal, agg.get());
       Assert.assertEquals(expectedVal, agg.get());
@@ -283,7 +313,7 @@ public class FilteredAggregatorTest
     String jsFn = "function(x) { return(x === 'a') }";
     factory = new FilteredAggregatorFactory(
         new DoubleSumAggregatorFactory("billy", "value"),
-        new JavaScriptDimFilter("dim", jsFn, null, JavaScriptConfig.getDefault())
+        new JavaScriptDimFilter("dim", jsFn, null, JavaScriptConfig.getEnabledInstance())
     );
     selector = new TestFloatColumnSelector(values);
     validateFilteredAggs(factory, values, selector);
@@ -297,7 +327,7 @@ public class FilteredAggregatorTest
     FilteredAggregatorFactory factory;
 
     String extractionJsFn = "function(str) { return str + 'AARDVARK'; }";
-    ExtractionFn extractionFn = new JavaScriptExtractionFn(extractionJsFn, false, JavaScriptConfig.getDefault());
+    ExtractionFn extractionFn = new JavaScriptExtractionFn(extractionJsFn, false, JavaScriptConfig.getEnabledInstance());
 
     factory = new FilteredAggregatorFactory(
         new DoubleSumAggregatorFactory("billy", "value"),
@@ -339,7 +369,7 @@ public class FilteredAggregatorTest
     String jsFn = "function(x) { return(x === 'aAARDVARK') }";
     factory = new FilteredAggregatorFactory(
         new DoubleSumAggregatorFactory("billy", "value"),
-        new JavaScriptDimFilter("dim", jsFn, extractionFn, JavaScriptConfig.getDefault())
+        new JavaScriptDimFilter("dim", jsFn, extractionFn, JavaScriptConfig.getEnabledInstance())
     );
     selector = new TestFloatColumnSelector(values);
     validateFilteredAggs(factory, values, selector);

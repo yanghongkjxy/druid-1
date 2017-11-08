@@ -20,14 +20,18 @@ package io.druid.segment.filter;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
-import com.metamx.collections.bitmap.ImmutableBitmap;
-import com.metamx.collections.spatial.search.Bound;
+import io.druid.collections.bitmap.ImmutableBitmap;
+import io.druid.collections.spatial.search.Bound;
+import io.druid.query.BitmapResultFactory;
 import io.druid.query.filter.BitmapIndexSelector;
+import io.druid.query.filter.DruidDoublePredicate;
+import io.druid.query.filter.DruidFloatPredicate;
 import io.druid.query.filter.DruidLongPredicate;
 import io.druid.query.filter.DruidPredicateFactory;
 import io.druid.query.filter.Filter;
 import io.druid.query.filter.ValueMatcher;
-import io.druid.query.filter.ValueMatcherFactory;
+import io.druid.segment.ColumnSelector;
+import io.druid.segment.ColumnSelectorFactory;
 import io.druid.segment.incremental.SpatialDimensionRowTransformer;
 
 /**
@@ -47,16 +51,17 @@ public class SpatialFilter implements Filter
   }
 
   @Override
-  public ImmutableBitmap getBitmapIndex(final BitmapIndexSelector selector)
+  public <T> T getBitmapResult(BitmapIndexSelector selector, BitmapResultFactory<T> bitmapResultFactory)
   {
     Iterable<ImmutableBitmap> search = selector.getSpatialIndex(dimension).search(bound);
-    return selector.getBitmapFactory().union(search);
+    return bitmapResultFactory.unionDimensionValueBitmaps(search);
   }
 
   @Override
-  public ValueMatcher makeMatcher(ValueMatcherFactory factory)
+  public ValueMatcher makeMatcher(ColumnSelectorFactory factory)
   {
-    return factory.makeValueMatcher(
+    return Filters.makeValueMatcher(
+        factory,
         dimension,
         new DruidPredicateFactory()
         {
@@ -80,15 +85,22 @@ public class SpatialFilter implements Filter
           @Override
           public DruidLongPredicate makeLongPredicate()
           {
-            return new DruidLongPredicate()
-            {
-              @Override
-              public boolean applyLong(long input)
-              {
-                // SpatialFilter does not currently support longs
-                return false;
-              }
-            };
+            // SpatialFilter does not currently support longs
+            return DruidLongPredicate.ALWAYS_FALSE;
+          }
+
+          @Override
+          public DruidFloatPredicate makeFloatPredicate()
+          {
+            // SpatialFilter does not currently support floats
+            return DruidFloatPredicate.ALWAYS_FALSE;
+          }
+
+          @Override
+          public DruidDoublePredicate makeDoublePredicate()
+          {
+            // SpatialFilter does not currently support doubles
+            return DruidDoublePredicate.ALWAYS_FALSE;
           }
         }
     );
@@ -98,5 +110,20 @@ public class SpatialFilter implements Filter
   public boolean supportsBitmapIndex(BitmapIndexSelector selector)
   {
     return selector.getBitmapIndex(dimension) != null;
+  }
+
+  @Override
+  public boolean supportsSelectivityEstimation(
+      ColumnSelector columnSelector, BitmapIndexSelector indexSelector
+  )
+  {
+    return false;
+  }
+
+  @Override
+  public double estimateSelectivity(BitmapIndexSelector indexSelector)
+  {
+    // selectivity estimation for multi-value columns is not implemented yet.
+    throw new UnsupportedOperationException();
   }
 }

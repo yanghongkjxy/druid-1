@@ -65,9 +65,9 @@ public class FilteredAggregator implements Aggregator
   }
 
   @Override
-  public String getName()
+  public double getDouble()
   {
-    throw new UnsupportedOperationException("getName is deprecated");
+    return delegate.getDouble();
   }
 
   @Override

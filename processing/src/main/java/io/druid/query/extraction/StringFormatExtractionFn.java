@@ -1,21 +1,21 @@
 /*
-* Licensed to Metamarkets Group Inc. (Metamarkets) under one
-* or more contributor license agreements. See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership. Metamarkets licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License. You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing,
-* software distributed under the License is distributed on an
-* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-* KIND, either express or implied. See the License for the
-* specific language governing permissions and limitations
-* under the License.
-*/
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
 
 package io.druid.query.extraction;
 
@@ -26,6 +26,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import io.druid.java.util.common.StringUtils;
 
+import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
 
 /**
@@ -33,7 +34,7 @@ import java.nio.ByteBuffer;
  */
 public class StringFormatExtractionFn extends DimExtractionFn
 {
-  public static enum NullHandling
+  public enum NullHandling
   {
     NULLSTRING,
     EMPTYSTRING,
@@ -42,13 +43,13 @@ public class StringFormatExtractionFn extends DimExtractionFn
     @JsonCreator
     public static NullHandling forValue(String value)
     {
-      return value == null ? NULLSTRING : NullHandling.valueOf(value.toUpperCase());
+      return value == null ? NULLSTRING : NullHandling.valueOf(StringUtils.toUpperCase(value));
     }
 
     @JsonValue
     public String toValue()
     {
-      return name().toLowerCase();
+      return StringUtils.toLowerCase(name());
     }
   }
 
@@ -94,8 +95,9 @@ public class StringFormatExtractionFn extends DimExtractionFn
                      .array();
   }
 
+  @Nullable
   @Override
-  public String apply(String value)
+  public String apply(@Nullable String value)
   {
     if (value == null) {
       if (nullHandling == NullHandling.RETURNNULL) {
@@ -105,7 +107,7 @@ public class StringFormatExtractionFn extends DimExtractionFn
         value = "";
       }
     }
-    return Strings.emptyToNull(String.format(format, value));
+    return Strings.emptyToNull(StringUtils.format(format, value));
   }
 
   @Override

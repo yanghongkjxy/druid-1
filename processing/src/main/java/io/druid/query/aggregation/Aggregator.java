@@ -19,30 +19,40 @@
 
 package io.druid.query.aggregation;
 
+import io.druid.guice.annotations.ExtensionPoint;
+
+import javax.annotation.Nullable;
+import java.io.Closeable;
+
 /**
  * An Aggregator is an object that can aggregate metrics.  Its aggregation-related methods (namely, aggregate() and get())
  * do not take any arguments as the assumption is that the Aggregator was given something in its constructor that
  * it can use to get at the next bit of data.
  *
  * Thus, an Aggregator can be thought of as a closure over some other thing that is stateful and changes between calls
- * to aggregate().  This is currently (as of this documentation) implemented through the use of Offset and
- * FloatColumnSelector objects.  The Aggregator has a handle on a FloatColumnSelector object which has a handle on an Offset.
- * QueryableIndex has both the Aggregators and the Offset object and iterates through the Offset calling the aggregate()
- * method on the Aggregators for each applicable row.
- *
- * This interface is old and going away.  It is being replaced by BufferAggregator
+ * to aggregate(). This is currently (as of this documentation) implemented through the use of {@link
+ * io.druid.segment.ColumnValueSelector} objects.
  */
-public interface Aggregator {
+@ExtensionPoint
+public interface Aggregator extends Closeable
+{
   void aggregate();
   void reset();
+  @Nullable
   Object get();
   float getFloat();
+  long getLong();
 
   /**
-   * Deprecated, to be removed in 0.10.0. See https://github.com/druid-io/druid/issues/3588.
+   * The default implementation casts {@link Aggregator#getFloat()} to double.
+   * This default method is added to enable smooth backward compatibility, please re-implement it if your aggregators
+   * work with numeric double columns.
    */
-  @Deprecated String getName();
-  void close();
+  default double getDouble()
+  {
+    return (double) getFloat();
+  }
 
-  long getLong();
+  @Override
+  void close();
 }

@@ -1,18 +1,20 @@
 /*
- * Druid - a distributed column store.
- * Copyright 2012 - 2015 Metamarkets Group Inc.
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
 package io.druid.data.input.impl;
@@ -20,12 +22,13 @@ package io.druid.data.input.impl;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Charsets;
-
+import com.google.common.base.Preconditions;
 import io.druid.data.input.ByteBufferInputRowParser;
 import io.druid.data.input.InputRow;
 import io.druid.java.util.common.parsers.ParseException;
 import io.druid.java.util.common.parsers.Parser;
 
+import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
@@ -41,10 +44,10 @@ public class StringInputRowParser implements ByteBufferInputRowParser
 
   private final ParseSpec parseSpec;
   private final MapInputRowParser mapParser;
-  private final Parser<String, Object> parser;
   private final Charset charset;
 
-  private CharBuffer chars = null;
+  private Parser<String, Object> parser;
+  private CharBuffer chars;
 
   @JsonCreator
   public StringInputRowParser(
@@ -52,9 +55,8 @@ public class StringInputRowParser implements ByteBufferInputRowParser
       @JsonProperty("encoding") String encoding
   )
   {
-    this.parseSpec = parseSpec;
+    this.parseSpec = Preconditions.checkNotNull(parseSpec, "parseSpec");
     this.mapParser = new MapInputRowParser(parseSpec);
-    this.parser = parseSpec.makeParser();
 
     if (encoding != null) {
       this.charset = Charset.forName(encoding);
@@ -122,18 +124,41 @@ public class StringInputRowParser implements ByteBufferInputRowParser
     return theMap;
   }
 
-  private Map<String, Object> parseString(String inputString)
+  public void initializeParser()
   {
-    return parser.parse(inputString);
+    if (parser == null) {
+      // parser should be created when it is really used to avoid unnecessary initialization of the underlying
+      // parseSpec.
+      parser = parseSpec.makeParser();
+    }
   }
 
-  public InputRow parse(String input)
+  public void startFileFromBeginning()
+  {
+    initializeParser();
+    parser.startFileFromBeginning();
+  }
+
+  @Nullable
+  public InputRow parse(@Nullable String input)
   {
     return parseMap(parseString(input));
   }
 
-  private InputRow parseMap(Map<String, Object> theMap)
+  @Nullable
+  private Map<String, Object> parseString(@Nullable String inputString)
   {
+    initializeParser();
+    return parser.parse(inputString);
+  }
+
+  @Nullable
+  private InputRow parseMap(@Nullable Map<String, Object> theMap)
+  {
+    // If a header is present in the data (and with proper configurations), a null is returned
+    if (theMap == null) {
+      return null;
+    }
     return mapParser.parse(theMap);
   }
 }

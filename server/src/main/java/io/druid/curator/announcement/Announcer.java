@@ -21,19 +21,15 @@ package io.druid.curator.announcement;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.Lists;
-import com.google.common.collect.MapMaker;
 import com.google.common.collect.Sets;
-
-import io.druid.curator.ShutdownNowIgnoringExecutorService;
 import io.druid.curator.cache.PathChildrenCacheFactory;
-import io.druid.curator.cache.SimplePathChildrenCacheFactory;
 import io.druid.java.util.common.IAE;
 import io.druid.java.util.common.ISE;
 import io.druid.java.util.common.guava.CloseQuietly;
+import io.druid.java.util.common.io.Closer;
 import io.druid.java.util.common.lifecycle.LifecycleStart;
 import io.druid.java.util.common.lifecycle.LifecycleStop;
 import io.druid.java.util.common.logger.Logger;
-
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.api.transaction.CuratorTransaction;
 import org.apache.curator.framework.api.transaction.CuratorTransactionFinal;
@@ -50,6 +46,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -64,11 +61,12 @@ public class Announcer
 
   private final CuratorFramework curator;
   private final PathChildrenCacheFactory factory;
+  private final ExecutorService pathChildrenCacheExecutor;
 
   private final List<Announceable> toAnnounce = Lists.newArrayList();
   private final List<Announceable> toUpdate = Lists.newArrayList();
-  private final ConcurrentMap<String, PathChildrenCache> listeners = new MapMaker().makeMap();
-  private final ConcurrentMap<String, ConcurrentMap<String, byte[]>> announcements = new MapMaker().makeMap();
+  private final ConcurrentMap<String, PathChildrenCache> listeners = new ConcurrentHashMap<>();
+  private final ConcurrentMap<String, ConcurrentMap<String, byte[]>> announcements = new ConcurrentHashMap<>();
   private final List<String> parentsIBuilt = new CopyOnWriteArrayList<String>();
 
   private boolean started = false;
@@ -79,7 +77,13 @@ public class Announcer
   )
   {
     this.curator = curator;
-    this.factory = new SimplePathChildrenCacheFactory(false, true, new ShutdownNowIgnoringExecutorService(exec));
+    this.pathChildrenCacheExecutor = exec;
+    this.factory = new PathChildrenCacheFactory.Builder()
+        .withCacheData(false)
+        .withCompressed(true)
+        .withExecutorService(exec)
+        .withShutdownExecutorOnClose(false)
+        .build();
   }
 
   @LifecycleStart
@@ -114,8 +118,15 @@ public class Announcer
 
       started = false;
 
-      for (Map.Entry<String, PathChildrenCache> entry : listeners.entrySet()) {
-        CloseQuietly.close(entry.getValue());
+      Closer closer = Closer.create();
+      for (PathChildrenCache cache : listeners.values()) {
+        closer.register(cache);
+      }
+      try {
+        CloseQuietly.close(closer);
+      }
+      finally {
+        pathChildrenCacheExecutor.shutdown();
       }
 
       for (Map.Entry<String, ConcurrentMap<String, byte[]>> entry : announcements.entrySet()) {
@@ -189,7 +200,7 @@ public class Announcer
       }
 
       // I don't have a watcher on this path yet, create a Map and start watching.
-      announcements.putIfAbsent(parentPath, new MapMaker().<String, byte[]>makeMap());
+      announcements.putIfAbsent(parentPath, new ConcurrentHashMap<>());
 
       // Guaranteed to be non-null, but might be a map put in there by another thread.
       final ConcurrentMap<String, byte[]> finalSubPaths = announcements.get(parentPath);
@@ -248,6 +259,11 @@ public class Announcer
                         }
                       }
                       break;
+                    case INITIALIZED:
+                    case CHILD_ADDED:
+                    case CHILD_UPDATED:
+                    case CONNECTION_SUSPENDED:
+                      // do nothing
                   }
                 }
               }

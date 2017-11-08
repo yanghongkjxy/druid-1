@@ -19,47 +19,61 @@
 
 package io.druid.query.groupby.epinephelinae;
 
-import com.google.common.collect.Iterators;
-
-import java.util.Comparator;
-import java.util.Iterator;
+import java.nio.ByteBuffer;
 
 public class Groupers
 {
-  private static final Comparator<Grouper.Entry<? extends Comparable>> ENTRY_COMPARATOR = new Comparator<Grouper.Entry<? extends Comparable>>()
-  {
-    @Override
-    public int compare(
-        final Grouper.Entry<? extends Comparable> lhs,
-        final Grouper.Entry<? extends Comparable> rhs
-    )
-    {
-      return lhs.getKey().compareTo(rhs.getKey());
-    }
-  };
-
   private Groupers()
   {
     // No instantiation
   }
 
+  static final AggregateResult DICTIONARY_FULL = AggregateResult.failure(
+      "Not enough dictionary space to execute this query. Try increasing "
+      + "druid.query.groupBy.maxMergingDictionarySize or enable disk spilling by setting "
+      + "druid.query.groupBy.maxOnDiskStorage to a positive number."
+  );
+  static final AggregateResult HASH_TABLE_FULL = AggregateResult.failure(
+      "Not enough aggregation buffer space to execute this query. Try increasing "
+      + "druid.processing.buffer.sizeBytes or enable disk spilling by setting "
+      + "druid.query.groupBy.maxOnDiskStorage to a positive number."
+  );
+
+  private static final int C1 = 0xcc9e2d51;
+  private static final int C2 = 0x1b873593;
+
+  /**
+   * This method was rewritten in Java from an intermediate step of the Murmur hash function in
+   * https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp, which contained the
+   * following header:
+   *
+   * MurmurHash3 was written by Austin Appleby, and is placed in the public domain. The author
+   * hereby disclaims copyright to this source code.
+   */
+  static int smear(int hashCode)
+  {
+    return C2 * Integer.rotateLeft(hashCode * C1, 15);
+  }
+
   public static int hash(final Object obj)
   {
     // Mask off the high bit so we can use that to determine if a bucket is used or not.
-    // Also apply the same XOR transformation that j.u.HashMap applies, to improve distribution.
+    // Also apply the smear function, to improve distribution.
     final int code = obj.hashCode();
-    return (code ^ (code >>> 16)) & 0x7fffffff;
+    return smear(code) & 0x7fffffff;
+
   }
 
-  public static <KeyType extends Comparable<KeyType>> Iterator<Grouper.Entry<KeyType>> mergeIterators(
-      final Iterable<Iterator<Grouper.Entry<KeyType>>> iterators,
-      final boolean sorted
-  )
+  static int getUsedFlag(int keyHash)
   {
-    if (sorted) {
-      return Iterators.mergeSorted(iterators, ENTRY_COMPARATOR);
-    } else {
-      return Iterators.concat(iterators.iterator());
-    }
+    return keyHash | 0x80000000;
+  }
+
+  public static ByteBuffer getSlice(ByteBuffer buffer, int sliceSize, int i)
+  {
+    final ByteBuffer slice = buffer.duplicate();
+    slice.position(sliceSize * i);
+    slice.limit(slice.position() + sliceSize);
+    return slice.slice();
   }
 }

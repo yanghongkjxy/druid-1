@@ -31,11 +31,11 @@ import io.druid.data.input.impl.CSVParseSpec;
 import io.druid.data.input.impl.DimensionsSpec;
 import io.druid.data.input.impl.StringInputRowParser;
 import io.druid.data.input.impl.TimestampSpec;
-import io.druid.granularity.QueryGranularities;
+import io.druid.java.util.common.DateTimes;
+import io.druid.java.util.common.granularity.Granularities;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
 import io.druid.query.aggregation.AggregationTestHelper;
-import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.CountAggregatorFactory;
 import io.druid.query.dimension.DefaultDimensionSpec;
 import io.druid.query.dimension.DimensionSpec;
@@ -43,6 +43,8 @@ import io.druid.query.dimension.ListFilteredDimensionSpec;
 import io.druid.query.dimension.RegexFilteredDimensionSpec;
 import io.druid.query.filter.SelectorDimFilter;
 import io.druid.query.groupby.GroupByQuery;
+import io.druid.query.groupby.GroupByQueryConfig;
+import io.druid.query.groupby.GroupByQueryRunnerTest;
 import io.druid.query.groupby.GroupByQueryRunnerTestHelper;
 import io.druid.query.spec.LegacySegmentSpec;
 import io.druid.query.topn.TopNQuery;
@@ -58,21 +60,25 @@ import io.druid.segment.QueryableIndexSegment;
 import io.druid.segment.Segment;
 import io.druid.segment.TestHelper;
 import io.druid.segment.incremental.IncrementalIndex;
-import io.druid.segment.incremental.OnheapIncrementalIndex;
 import org.apache.commons.io.FileUtils;
-import org.joda.time.DateTime;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 /**
  */
+@RunWith(Parameterized.class)
 public class MultiValuedDimensionTest
 {
   private AggregationTestHelper helper;
@@ -82,34 +88,43 @@ public class MultiValuedDimensionTest
 
   private static File persistedSegmentDir;
 
-  public MultiValuedDimensionTest() throws Exception
+  public MultiValuedDimensionTest(
+      final GroupByQueryConfig config
+  ) throws Exception
   {
     helper = AggregationTestHelper.createGroupByQueryAggregationTestHelper(
-        ImmutableList.<Module>of(), null
+        ImmutableList.<Module>of(),
+        config,
+        null
     );
+  }
+
+  @Parameterized.Parameters(name = "{0}")
+  public static Collection<?> constructorFeeder() throws IOException
+  {
+    final List<Object[]> constructors = Lists.newArrayList();
+    for (GroupByQueryConfig config : GroupByQueryRunnerTest.testConfigs()) {
+      constructors.add(new Object[]{config});
+    }
+    return constructors;
   }
 
   @BeforeClass
   public static void setupClass() throws Exception
   {
-    incrementalIndex = new OnheapIncrementalIndex(
-        0,
-        QueryGranularities.NONE,
-        new AggregatorFactory[]{
-            new CountAggregatorFactory("count")
-        },
-        true,
-        true,
-        true,
-        5000
-    );
+    incrementalIndex = new IncrementalIndex.Builder()
+        .setSimpleTestingIndexSchema(new CountAggregatorFactory("count"))
+        .setMaxRowCount(5000)
+        .buildOnheap();
 
     StringInputRowParser parser = new StringInputRowParser(
         new CSVParseSpec(
             new TimestampSpec("timestamp", "iso", null),
             new DimensionsSpec(DimensionsSpec.getDefaultSchemas(ImmutableList.of("product", "tags")), null, null),
             "\t",
-            ImmutableList.of("timestamp", "product", "tags")
+            ImmutableList.of("timestamp", "product", "tags"),
+            false,
+            0
         ),
         "UTF-8"
     );
@@ -118,6 +133,7 @@ public class MultiValuedDimensionTest
         "2011-01-12T00:00:00.000Z,product_1,t1\tt2\tt3",
         "2011-01-13T00:00:00.000Z,product_2,t3\tt4\tt5",
         "2011-01-14T00:00:00.000Z,product_3,t5\tt6\tt7",
+        "2011-01-14T00:00:00.000Z,product_4"
     };
 
     for (String row : rows) {
@@ -125,7 +141,7 @@ public class MultiValuedDimensionTest
     }
 
     persistedSegmentDir = Files.createTempDir();
-    TestHelper.getTestIndexMerger()
+    TestHelper.getTestIndexMergerV9()
               .persist(incrementalIndex, persistedSegmentDir, new IndexSpec());
 
     queryableIndex = TestHelper.getTestIndexIO().loadIndex(persistedSegmentDir);
@@ -138,16 +154,9 @@ public class MultiValuedDimensionTest
         .builder()
         .setDataSource("xx")
         .setQuerySegmentSpec(new LegacySegmentSpec("1970/3000"))
-        .setGranularity(QueryGranularities.ALL)
+        .setGranularity(Granularities.ALL)
         .setDimensions(Lists.<DimensionSpec>newArrayList(new DefaultDimensionSpec("tags", "tags")))
-        .setAggregatorSpecs(
-            Arrays.asList(
-                new AggregatorFactory[]
-                    {
-                        new CountAggregatorFactory("count")
-                    }
-            )
-        )
+        .setAggregatorSpecs(Collections.singletonList(new CountAggregatorFactory("count")))
         .build();
 
     Sequence<Row> result = helper.runQueryOnSegmentsObjs(
@@ -159,6 +168,7 @@ public class MultiValuedDimensionTest
     );
 
     List<Row> expectedResults = Arrays.asList(
+        GroupByQueryRunnerTestHelper.createExpectedRow("1970-01-01T00:00:00.000Z", "tags", null, "count", 2L),
         GroupByQueryRunnerTestHelper.createExpectedRow("1970-01-01T00:00:00.000Z", "tags", "t1", "count", 2L),
         GroupByQueryRunnerTestHelper.createExpectedRow("1970-01-01T00:00:00.000Z", "tags", "t2", "count", 2L),
         GroupByQueryRunnerTestHelper.createExpectedRow("1970-01-01T00:00:00.000Z", "tags", "t3", "count", 4L),
@@ -169,14 +179,6 @@ public class MultiValuedDimensionTest
     );
 
     TestHelper.assertExpectedObjects(expectedResults, Sequences.toList(result, new ArrayList<Row>()), "");
-
-    result = helper.runQueryOnSegmentsObjs(
-        ImmutableList.<Segment>of(
-            new QueryableIndexSegment("sid1", queryableIndex),
-            new IncrementalIndexSegment(incrementalIndex, "sid2")
-        ),
-        query
-    );
   }
 
   @Test
@@ -186,19 +188,10 @@ public class MultiValuedDimensionTest
         .builder()
         .setDataSource("xx")
         .setQuerySegmentSpec(new LegacySegmentSpec("1970/3000"))
-        .setGranularity(QueryGranularities.ALL)
+        .setGranularity(Granularities.ALL)
         .setDimensions(Lists.<DimensionSpec>newArrayList(new DefaultDimensionSpec("tags", "tags")))
-        .setAggregatorSpecs(
-            Arrays.asList(
-                new AggregatorFactory[]
-                    {
-                        new CountAggregatorFactory("count")
-                    }
-            )
-        )
-        .setDimFilter(
-            new SelectorDimFilter("tags", "t3", null)
-        )
+        .setAggregatorSpecs(Collections.singletonList(new CountAggregatorFactory("count")))
+        .setDimFilter(new SelectorDimFilter("tags", "t3", null))
         .build();
 
     Sequence<Row> result = helper.runQueryOnSegmentsObjs(
@@ -227,7 +220,7 @@ public class MultiValuedDimensionTest
         .builder()
         .setDataSource("xx")
         .setQuerySegmentSpec(new LegacySegmentSpec("1970/3000"))
-        .setGranularity(QueryGranularities.ALL)
+        .setGranularity(Granularities.ALL)
         .setDimensions(
             Lists.<DimensionSpec>newArrayList(
                 new RegexFilteredDimensionSpec(
@@ -236,17 +229,8 @@ public class MultiValuedDimensionTest
                 )
             )
         )
-        .setAggregatorSpecs(
-            Arrays.asList(
-                new AggregatorFactory[]
-                    {
-                        new CountAggregatorFactory("count")
-                    }
-            )
-        )
-        .setDimFilter(
-            new SelectorDimFilter("tags", "t3", null)
-        )
+        .setAggregatorSpecs(Collections.singletonList(new CountAggregatorFactory("count")))
+        .setDimFilter(new SelectorDimFilter("tags", "t3", null))
         .build();
 
     Sequence<Row> result = helper.runQueryOnSegmentsObjs(
@@ -269,7 +253,7 @@ public class MultiValuedDimensionTest
   {
     TopNQuery query = new TopNQueryBuilder()
         .dataSource("xx")
-        .granularity(QueryGranularities.ALL)
+        .granularity(Granularities.ALL)
         .dimension(new ListFilteredDimensionSpec(
             new DefaultDimensionSpec("tags", "tags"),
             ImmutableSet.of("t3"),
@@ -277,13 +261,7 @@ public class MultiValuedDimensionTest
         ))
         .metric("count")
         .intervals(QueryRunnerTestHelper.fullOnInterval)
-        .aggregators(
-            Arrays.asList(
-                new AggregatorFactory[]
-                    {
-                        new CountAggregatorFactory("count")
-                    }
-            ))
+        .aggregators(Collections.singletonList(new CountAggregatorFactory("count")))
         .threshold(5)
         .filters(new SelectorDimFilter("tags", "t3", null)).build();
 
@@ -301,10 +279,10 @@ public class MultiValuedDimensionTest
         null
     );
     Map<String, Object> context = Maps.newHashMap();
-    Sequence<Result<TopNResultValue>> result = runner.run(query, context);
+    Sequence<Result<TopNResultValue>> result = runner.run(QueryPlus.wrap(query), context);
     List<Result<TopNResultValue>> expectedResults = Arrays.asList(
         new Result<TopNResultValue>(
-            new DateTime("2011-01-12T00:00:00.000Z"),
+            DateTimes.of("2011-01-12T00:00:00.000Z"),
             new TopNResultValue(
                 Arrays.<Map<String, Object>>asList(
                     ImmutableMap.<String, Object>of(

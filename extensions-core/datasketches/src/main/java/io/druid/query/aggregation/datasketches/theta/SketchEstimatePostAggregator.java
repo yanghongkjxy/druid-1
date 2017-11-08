@@ -25,13 +25,14 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.Sets;
 import com.google.common.primitives.Doubles;
-import com.yahoo.sketches.theta.Sketch;
+import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.PostAggregator;
+import io.druid.query.aggregation.post.PostAggregatorIds;
+import io.druid.query.cache.CacheKeyBuilder;
 
 import java.util.Comparator;
 import java.util.Map;
 import java.util.Set;
-
 public class SketchEstimatePostAggregator implements PostAggregator
 {
 
@@ -82,16 +83,11 @@ public class SketchEstimatePostAggregator implements PostAggregator
   @Override
   public Object compute(Map<String, Object> combinedAggregators)
   {
-    Sketch sketch = SketchAggregatorFactory.toSketch(field.compute(combinedAggregators));
+    SketchHolder holder = (SketchHolder) field.compute(combinedAggregators);
     if (errorBoundsStdDev != null) {
-      SketchEstimateWithErrorBounds result = new SketchEstimateWithErrorBounds(
-          sketch.getEstimate(),
-          sketch.getUpperBound(errorBoundsStdDev),
-          sketch.getLowerBound(errorBoundsStdDev),
-          errorBoundsStdDev);
-      return result;
+      return holder.getEstimateWithErrorBounds(errorBoundsStdDev);
     } else {
-      return sketch.getEstimate();
+      return holder.getEstimate();
     }
   }
 
@@ -100,6 +96,12 @@ public class SketchEstimatePostAggregator implements PostAggregator
   public String getName()
   {
     return name;
+  }
+
+  @Override
+  public PostAggregator decorate(Map<String, AggregatorFactory> aggregators)
+  {
+    return this;
   }
 
   @JsonProperty
@@ -139,9 +141,18 @@ public class SketchEstimatePostAggregator implements PostAggregator
     if (!name.equals(that.name)) {
       return false;
     }
-    if (errorBoundsStdDev != that.errorBoundsStdDev) {
+    
+    if (errorBoundsStdDev == null ^ that.errorBoundsStdDev == null) {
+      // one of the two stddevs (not both) are null
       return false;
     }
+    
+    if (errorBoundsStdDev != null && that.errorBoundsStdDev != null && 
+        errorBoundsStdDev.intValue() != that.errorBoundsStdDev.intValue()) {
+      // neither stddevs are null, Integer values don't match
+      return false;
+    }
+
     return field.equals(that.field);
 
   }
@@ -153,5 +164,13 @@ public class SketchEstimatePostAggregator implements PostAggregator
     result = 31 * result + field.hashCode();
     result = 31 * result + (errorBoundsStdDev != null ? errorBoundsStdDev.hashCode() : 0);
     return result;
+  }
+
+  @Override
+  public byte[] getCacheKey()
+  {
+    final CacheKeyBuilder builder = new CacheKeyBuilder(PostAggregatorIds.DATA_SKETCHES_SKETCH_ESTIMATE)
+        .appendCacheable(field);
+    return errorBoundsStdDev == null ? builder.build() : builder.appendInt(errorBoundsStdDev).build();
   }
 }

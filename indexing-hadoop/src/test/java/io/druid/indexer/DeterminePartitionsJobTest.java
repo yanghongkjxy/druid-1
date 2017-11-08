@@ -26,17 +26,15 @@ import io.druid.data.input.impl.CSVParseSpec;
 import io.druid.data.input.impl.DimensionsSpec;
 import io.druid.data.input.impl.StringInputRowParser;
 import io.druid.data.input.impl.TimestampSpec;
-import io.druid.granularity.QueryGranularities;
 import io.druid.indexer.partitions.SingleDimensionPartitionsSpec;
-import io.druid.java.util.common.Granularity;
+import io.druid.java.util.common.Intervals;
+import io.druid.java.util.common.granularity.Granularities;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.LongSumAggregatorFactory;
 import io.druid.segment.indexing.DataSchema;
 import io.druid.segment.indexing.granularity.UniformGranularitySpec;
 import io.druid.timeline.partition.SingleDimensionShardSpec;
 import org.apache.commons.io.FileUtils;
-import org.joda.time.DateTime;
-import org.joda.time.Interval;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Test;
@@ -80,11 +78,11 @@ public class DeterminePartitionsJobTest
                 new int[]{5},
                 new String[][][]{
                     {
-                        { null, "c.example.com" },
-                        { "c.example.com", "e.example.com" },
-                        { "e.example.com", "g.example.com" },
-                        { "g.example.com", "i.example.com" },
-                        { "i.example.com", null }
+                        {null, "c.example.com"},
+                        {"c.example.com", "e.example.com"},
+                        {"e.example.com", "g.example.com"},
+                        {"g.example.com", "i.example.com"},
+                        {"i.example.com", null }
                     }
                 },
                 ImmutableList.of(
@@ -108,11 +106,11 @@ public class DeterminePartitionsJobTest
                 new int[]{5},
                 new String[][][]{
                     {
-                        { null, "c.example.com"},
-                        { "c.example.com", "e.example.com" },
-                        { "e.example.com", "g.example.com" },
-                        { "g.example.com", "i.example.com" },
-                        { "i.example.com", null }
+                        {null, "c.example.com"},
+                        {"c.example.com", "e.example.com"},
+                        {"e.example.com", "g.example.com"},
+                        {"g.example.com", "i.example.com"},
+                        {"i.example.com", null}
                     }
                 },
                 ImmutableList.of(
@@ -146,16 +144,16 @@ public class DeterminePartitionsJobTest
                 new int[]{2, 2, 2},
                 new String[][][]{
                     {
-                        { null, "f.example.com" },
-                        { "f.example.com", null }
+                        {null, "f.example.com"},
+                        {"f.example.com", null}
                     },
                     {
-                        { null, "f.example.com" },
-                        { "f.example.com", null }
+                        {null, "f.example.com"},
+                        {"f.example.com", null}
                     },
                     {
-                        { null, "f.example.com" },
-                        { "f.example.com", null }
+                        {null, "f.example.com"},
+                        {"f.example.com", null}
                     }
                 },
                 ImmutableList.of(
@@ -229,7 +227,9 @@ public class DeterminePartitionsJobTest
                             new TimestampSpec("timestamp", "yyyyMMddHH", null),
                             new DimensionsSpec(DimensionsSpec.getDefaultSchemas(ImmutableList.of("host", "country")), null, null),
                             null,
-                            ImmutableList.of("timestamp", "host", "country", "visited_num")
+                            ImmutableList.of("timestamp", "host", "country", "visited_num"),
+                            false,
+                            0
                         ),
                         null
                     ),
@@ -237,8 +237,9 @@ public class DeterminePartitionsJobTest
                 ),
                 new AggregatorFactory[]{new LongSumAggregatorFactory("visited_num", "visited_num")},
                 new UniformGranularitySpec(
-                    Granularity.DAY, QueryGranularities.NONE, ImmutableList.of(new Interval(interval))
+                    Granularities.DAY, Granularities.NONE, ImmutableList.of(Intervals.of(interval))
                 ),
+                null,
                 HadoopDruidIndexerConfig.JSON_MAPPER
             ),
             new HadoopIOConfig(
@@ -269,7 +270,8 @@ public class DeterminePartitionsJobTest
                 null,
                 null,
                 false,
-                false
+                false,
+                null
             )
         )
     );
@@ -285,7 +287,7 @@ public class DeterminePartitionsJobTest
     int segmentNum = 0;
     Assert.assertEquals(expectedNumOfSegments, config.getSchema().getTuningConfig().getShardSpecs().size());
 
-    for (Map.Entry<DateTime, List<HadoopyShardSpec>> entry : config.getSchema()
+    for (Map.Entry<Long, List<HadoopyShardSpec>> entry : config.getSchema()
                                                                    .getTuningConfig()
                                                                    .getShardSpecs()
                                                                    .entrySet()) {

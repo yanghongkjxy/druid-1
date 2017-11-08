@@ -20,9 +20,10 @@
 package io.druid.segment.loading;
 
 import com.google.common.io.ByteStreams;
-
+import io.druid.java.util.common.IOE;
 import io.druid.java.util.common.StringUtils;
 import io.druid.storage.hdfs.HdfsFileTimestampVersionFinder;
+import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
@@ -58,9 +59,8 @@ public class HdfsFileTimestampVersionFinderTest
   public static void setupStatic() throws IOException, ClassNotFoundException
   {
     hdfsTmpDir = File.createTempFile("hdfsHandlerTest", "dir");
-    hdfsTmpDir.deleteOnExit();
     if (!hdfsTmpDir.delete()) {
-      throw new IOException(String.format("Unable to delete hdfsTmpDir [%s]", hdfsTmpDir.getAbsolutePath()));
+      throw new IOE("Unable to delete hdfsTmpDir [%s]", hdfsTmpDir.getAbsolutePath());
     }
     conf = new Configuration(true);
     conf.set(MiniDFSCluster.HDFS_MINIDFS_BASEDIR, hdfsTmpDir.getAbsolutePath());
@@ -70,7 +70,6 @@ public class HdfsFileTimestampVersionFinderTest
     final File tmpFile = File.createTempFile("hdfsHandlerTest", ".data");
     tmpFile.delete();
     try {
-      tmpFile.deleteOnExit();
       Files.copy(new ByteArrayInputStream(pathByteContents), tmpFile.toPath());
       try (OutputStream stream = miniCluster.getFileSystem().create(filePath)) {
         Files.copy(tmpFile.toPath(), stream);
@@ -87,6 +86,7 @@ public class HdfsFileTimestampVersionFinderTest
     if (miniCluster != null) {
       miniCluster.shutdown(true);
     }
+    FileUtils.deleteDirectory(hdfsTmpDir);
   }
 
 
@@ -110,20 +110,18 @@ public class HdfsFileTimestampVersionFinderTest
   {
     final Path oldPath = new Path(perTestPath, "555test.txt");
     Assert.assertFalse(miniCluster.getFileSystem().exists(oldPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Thread.sleep(10);
 
     final Path newPath = new Path(perTestPath, "666test.txt");
     Assert.assertFalse(miniCluster.getFileSystem().exists(newPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Assert.assertEquals(newPath.toString(), finder.getLatestVersion(oldPath.toUri(), Pattern.compile(".*")).getPath());
@@ -134,20 +132,18 @@ public class HdfsFileTimestampVersionFinderTest
   {
     final Path oldPath = new Path(perTestPath, "555test.txt");
     Assert.assertFalse(miniCluster.getFileSystem().exists(oldPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Thread.sleep(10);
 
     final Path newPath = new Path(perTestPath, "666test.txt");
     Assert.assertFalse(miniCluster.getFileSystem().exists(newPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Assert.assertEquals(newPath.toString(), finder.getLatestVersion(newPath.toUri(), Pattern.compile(".*")).getPath());
@@ -166,20 +162,18 @@ public class HdfsFileTimestampVersionFinderTest
   {
     final Path oldPath = new Path(perTestPath, "555test.txt");
     Assert.assertFalse(miniCluster.getFileSystem().exists(oldPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Thread.sleep(10);
 
     final Path newPath = new Path(perTestPath, "666test.txt");
     Assert.assertFalse(miniCluster.getFileSystem().exists(newPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Assert.assertEquals(
@@ -193,20 +187,18 @@ public class HdfsFileTimestampVersionFinderTest
   {
     final Path oldPath = new Path(perTestPath, "555test.txt");
     Assert.assertFalse(miniCluster.getFileSystem().exists(oldPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(oldPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Thread.sleep(10);
 
     final Path newPath = new Path(perTestPath, "666test.txt2");
     Assert.assertFalse(miniCluster.getFileSystem().exists(newPath));
-    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath)) {
-      try (final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
-        ByteStreams.copy(inputStream, outputStream);
-      }
+    try (final OutputStream outputStream = miniCluster.getFileSystem().create(newPath);
+         final InputStream inputStream = new ByteArrayInputStream(pathByteContents)) {
+      ByteStreams.copy(inputStream, outputStream);
     }
 
     Assert.assertEquals(

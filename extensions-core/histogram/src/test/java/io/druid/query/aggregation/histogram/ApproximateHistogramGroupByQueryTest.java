@@ -22,9 +22,9 @@ package io.druid.query.aggregation.histogram;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import io.druid.data.input.Row;
+import io.druid.java.util.common.StringUtils;
 import io.druid.query.QueryRunner;
 import io.druid.query.QueryRunnerTestHelper;
-import io.druid.query.aggregation.PostAggregator;
 import io.druid.query.dimension.DefaultDimensionSpec;
 import io.druid.query.dimension.DimensionSpec;
 import io.druid.query.groupby.GroupByQuery;
@@ -42,6 +42,7 @@ import org.junit.runners.Parameterized;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -53,18 +54,24 @@ public class ApproximateHistogramGroupByQueryTest
   private GroupByQueryRunnerFactory factory;
   private String testName;
 
-  @Parameterized.Parameters(name="{0}")
+  @Parameterized.Parameters(name = "{0}")
   public static Iterable<Object[]> constructorFeeder() throws IOException
   {
-    final GroupByQueryConfig defaultConfig = new GroupByQueryConfig()
+    final GroupByQueryConfig v1Config = new GroupByQueryConfig()
     {
+      @Override
+      public String getDefaultStrategy()
+      {
+        return GroupByStrategySelector.STRATEGY_V1;
+      }
+
       @Override
       public String toString()
       {
-        return "default";
+        return "v1";
       }
     };
-    final GroupByQueryConfig singleThreadedConfig = new GroupByQueryConfig()
+    final GroupByQueryConfig v1SingleThreadedConfig = new GroupByQueryConfig()
     {
       @Override
       public boolean isSingleThreaded()
@@ -73,9 +80,15 @@ public class ApproximateHistogramGroupByQueryTest
       }
 
       @Override
+      public String getDefaultStrategy()
+      {
+        return GroupByStrategySelector.STRATEGY_V1;
+      }
+
+      @Override
       public String toString()
       {
-        return "singleThreaded";
+        return "v1SingleThreaded";
       }
     };
     final GroupByQueryConfig v2Config = new GroupByQueryConfig()
@@ -93,20 +106,20 @@ public class ApproximateHistogramGroupByQueryTest
       }
     };
 
-    defaultConfig.setMaxIntermediateRows(10000);
-    singleThreadedConfig.setMaxIntermediateRows(10000);
+    v1Config.setMaxIntermediateRows(10000);
+    v1SingleThreadedConfig.setMaxIntermediateRows(10000);
 
     final List<Object[]> constructors = Lists.newArrayList();
     final List<GroupByQueryConfig> configs = ImmutableList.of(
-        defaultConfig,
-        singleThreadedConfig,
+        v1Config,
+        v1SingleThreadedConfig,
         v2Config
     );
 
     for (GroupByQueryConfig config : configs) {
       final GroupByQueryRunnerFactory factory = GroupByQueryRunnerTest.makeQueryRunnerFactory(config);
       for (QueryRunner<Row> runner : QueryRunnerTestHelper.makeQueryRunners(factory)) {
-        final String testName = String.format(
+        final String testName = StringUtils.format(
             "config=%s, runner=%s",
             config.toString(),
             runner.toString()
@@ -169,13 +182,13 @@ public class ApproximateHistogramGroupByQueryTest
             )
         )
         .setPostAggregatorSpecs(
-            Arrays.<PostAggregator>asList(
+            Collections.singletonList(
                 new QuantilePostAggregator("quantile", "apphisto", 0.5f)
             )
         )
         .build();
 
-    List<Row> expectedResults = Arrays.asList(
+    List<Row> expectedResults = Collections.singletonList(
         GroupByQueryRunnerTestHelper.createExpectedRow(
             "1970-01-01T00:00:00.000Z",
             "marketalias", "upfront",
@@ -243,13 +256,13 @@ public class ApproximateHistogramGroupByQueryTest
             )
         )
         .setPostAggregatorSpecs(
-            Arrays.<PostAggregator>asList(
+            Collections.singletonList(
                 new QuantilePostAggregator("quantile", "quantile", 0.5f)
             )
         )
         .build();
 
-    List<Row> expectedResults = Arrays.asList(
+    List<Row> expectedResults = Collections.singletonList(
         GroupByQueryRunnerTestHelper.createExpectedRow(
             "1970-01-01T00:00:00.000Z",
             "marketalias", "upfront",

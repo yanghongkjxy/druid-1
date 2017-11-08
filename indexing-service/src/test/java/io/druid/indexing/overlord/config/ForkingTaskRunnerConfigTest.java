@@ -1,18 +1,18 @@
 /*
  * Licensed to Metamarkets Group Inc. (Metamarkets) under one
- * or more contributor license agreements.  See the NOTICE file
+ * or more contributor license agreements. See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership.  Metamarkets licenses this file
+ * regarding copyright ownership. Metamarkets licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * with the License. You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
+ * KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations
  * under the License.
  */
@@ -26,6 +26,7 @@ import com.google.inject.Binder;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Module;
+import com.google.inject.ProvisionException;
 import com.google.inject.name.Names;
 import io.druid.guice.GuiceInjectors;
 import io.druid.guice.IndexingServiceModuleHelper;
@@ -51,6 +52,7 @@ public class ForkingTaskRunnerConfigTest
             {
               binder.bind(Key.get(String.class, Names.named("serviceName"))).toInstance("some service");
               binder.bind(Key.get(Integer.class, Names.named("servicePort"))).toInstance(0);
+              binder.bind(Key.get(Integer.class, Names.named("tlsServicePort"))).toInstance(-1);
             }
           }
       )
@@ -143,19 +145,19 @@ public class ForkingTaskRunnerConfigTest
     );
   }
 
-  @Test(expected = com.google.inject.ProvisionException.class)
+  @Test(expected = ProvisionException.class)
   public void testExceptionalJavaOptArray() throws JsonProcessingException
   {
     buildFromProperties(ForkingTaskRunnerConfig.JAVA_OPTS_ARRAY_PROPERTY, "not an array");
   }
 
-  @Test(expected = com.google.inject.ProvisionException.class)
+  @Test(expected = ProvisionException.class)
   public void testExceptionalJavaOpt() throws JsonProcessingException
   {
     buildFromProperties(ForkingTaskRunnerConfig.JAVA_OPTS_PROPERTY, "[\"not a string\"]");
   }
 
-  @Test(expected = com.google.inject.ProvisionException.class)
+  @Test(expected = ProvisionException.class)
   public void testExceptionalJavaOpt2() throws JsonProcessingException
   {
     buildFromProperties(ForkingTaskRunnerConfig.JAVA_OPTS_PROPERTY, "{\"not a string\":\"someVal\"}");

@@ -21,13 +21,12 @@ package io.druid.storage.azure;
 
 import com.google.common.collect.ImmutableMap;
 import com.microsoft.azure.storage.StorageException;
-
 import io.druid.java.util.common.FileUtils;
+import io.druid.java.util.common.Intervals;
 import io.druid.segment.loading.SegmentLoadingException;
 import io.druid.timeline.DataSegment;
 import io.druid.timeline.partition.NoneShardSpec;
 import org.easymock.EasyMockSupport;
-import org.joda.time.Interval;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -46,13 +45,12 @@ import static org.junit.Assert.assertTrue;
 public class AzureDataSegmentPullerTest extends EasyMockSupport
 {
 
-  private AzureStorage azureStorage;
   private static final String SEGMENT_FILE_NAME = "segment";
   private static final String containerName = "container";
   private static final String blobPath = "/path/to/storage/index.zip";
   private static final DataSegment dataSegment = new DataSegment(
       "test",
-      new Interval("2015-04-12/2015-04-13"),
+      Intervals.of("2015-04-12/2015-04-13"),
       "1",
       ImmutableMap.<String, Object>of("containerName", containerName, "blobPath", blobPath),
       null,
@@ -61,6 +59,7 @@ public class AzureDataSegmentPullerTest extends EasyMockSupport
       0,
       1
   );
+  private AzureStorage azureStorage;
 
   @Before
   public void before()
@@ -73,25 +72,29 @@ public class AzureDataSegmentPullerTest extends EasyMockSupport
   {
     final String value = "bucket";
     final File pulledFile = AzureTestUtils.createZipTempFile(SEGMENT_FILE_NAME, value);
-    pulledFile.deleteOnExit();
     final File toDir = Files.createTempDirectory("druid").toFile();
-    toDir.deleteOnExit();
-    final InputStream zipStream = new FileInputStream(pulledFile);
+    try {
+      final InputStream zipStream = new FileInputStream(pulledFile);
 
-    expect(azureStorage.getBlobInputStream(containerName, blobPath)).andReturn(zipStream);
+      expect(azureStorage.getBlobInputStream(containerName, blobPath)).andReturn(zipStream);
 
-    replayAll();
+      replayAll();
 
-    AzureDataSegmentPuller puller = new AzureDataSegmentPuller(azureStorage);
+      AzureDataSegmentPuller puller = new AzureDataSegmentPuller(azureStorage);
 
-    FileUtils.FileCopyResult result = puller.getSegmentFiles(containerName, blobPath, toDir);
+      FileUtils.FileCopyResult result = puller.getSegmentFiles(containerName, blobPath, toDir);
 
-    File expected = new File(toDir, SEGMENT_FILE_NAME);
-    assertEquals(value.length(), result.size());
-    assertTrue(expected.exists());
-    assertEquals(value.length(), expected.length());
+      File expected = new File(toDir, SEGMENT_FILE_NAME);
+      assertEquals(value.length(), result.size());
+      assertTrue(expected.exists());
+      assertEquals(value.length(), expected.length());
 
-    verifyAll();
+      verifyAll();
+    }
+    finally {
+      pulledFile.delete();
+      org.apache.commons.io.FileUtils.deleteDirectory(toDir);
+    }
   }
 
   @Test(expected = RuntimeException.class)
@@ -100,27 +103,30 @@ public class AzureDataSegmentPullerTest extends EasyMockSupport
   {
 
     final File outDir = Files.createTempDirectory("druid").toFile();
-    outDir.deleteOnExit();
+    try {
+      expect(azureStorage.getBlobInputStream(containerName, blobPath)).andThrow(
+          new StorageException(
+              "error",
+              "error",
+              404,
+              null,
+              null
+          )
+      );
 
-    expect(azureStorage.getBlobInputStream(containerName, blobPath)).andThrow(
-        new StorageException(
-            "error",
-            "error",
-            404,
-            null,
-            null
-        )
-    );
+      replayAll();
 
-    replayAll();
+      AzureDataSegmentPuller puller = new AzureDataSegmentPuller(azureStorage);
 
-    AzureDataSegmentPuller puller = new AzureDataSegmentPuller(azureStorage);
+      puller.getSegmentFiles(containerName, blobPath, outDir);
 
-    puller.getSegmentFiles(containerName, blobPath, outDir);
+      assertFalse(outDir.exists());
 
-    assertFalse(outDir.exists());
-
-    verifyAll();
+      verifyAll();
+    }
+    finally {
+      org.apache.commons.io.FileUtils.deleteDirectory(outDir);
+    }
 
   }
 
@@ -128,18 +134,23 @@ public class AzureDataSegmentPullerTest extends EasyMockSupport
   public void getSegmentFilesTest() throws SegmentLoadingException
   {
     final File outDir = new File("");
-    final FileUtils.FileCopyResult result = createMock(FileUtils.FileCopyResult.class);
-    final AzureDataSegmentPuller puller = createMockBuilder(AzureDataSegmentPuller.class).withConstructor(
-        azureStorage
-    ).addMockedMethod("getSegmentFiles", String.class, String.class, File.class).createMock();
+    try {
+      final FileUtils.FileCopyResult result = createMock(FileUtils.FileCopyResult.class);
+      final AzureDataSegmentPuller puller = createMockBuilder(AzureDataSegmentPuller.class).withConstructor(
+          azureStorage
+      ).addMockedMethod("getSegmentFiles", String.class, String.class, File.class).createMock();
 
-    expect(puller.getSegmentFiles(containerName, blobPath, outDir)).andReturn(result);
+      expect(puller.getSegmentFiles(containerName, blobPath, outDir)).andReturn(result);
 
-    replayAll();
+      replayAll();
 
-    puller.getSegmentFiles(dataSegment, outDir);
+      puller.getSegmentFiles(dataSegment, outDir);
 
-    verifyAll();
+      verifyAll();
+    }
+    finally {
+      outDir.delete();
+    }
 
   }
 

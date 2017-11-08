@@ -25,6 +25,7 @@ import com.google.inject.Inject;
 import com.mysql.jdbc.exceptions.MySQLTransientException;
 
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.metadata.MetadataStorageConnectorConfig;
 import io.druid.metadata.MetadataStorageTablesConfig;
@@ -42,6 +43,7 @@ public class MySQLConnector extends SQLMetadataConnector
   private static final Logger log = new Logger(MySQLConnector.class);
   private static final String PAYLOAD_TYPE = "LONGBLOB";
   private static final String SERIAL_TYPE = "BIGINT(20) AUTO_INCREMENT";
+  private static final String QUOTE_STRING = "`";
 
   private final DBI dbi;
 
@@ -74,6 +76,12 @@ public class MySQLConnector extends SQLMetadataConnector
   protected String getSerialType()
   {
     return SERIAL_TYPE;
+  }
+
+  @Override
+  public String getQuoteString()
+  {
+    return QUOTE_STRING;
   }
 
   @Override
@@ -129,7 +137,7 @@ public class MySQLConnector extends SQLMetadataConnector
           public Void withHandle(Handle handle) throws Exception
           {
             handle.createStatement(
-                String.format(
+                StringUtils.format(
                     "INSERT INTO %1$s (%2$s, %3$s) VALUES (:key, :value) ON DUPLICATE KEY UPDATE %3$s = :value",
                     tableName,
                     keyColumn,
@@ -146,5 +154,8 @@ public class MySQLConnector extends SQLMetadataConnector
   }
 
   @Override
-  public DBI getDBI() { return dbi; }
+  public DBI getDBI()
+  {
+    return dbi;
+  }
 }

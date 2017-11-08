@@ -28,7 +28,9 @@ import java.io.IOException;
 import java.util.Collection;
 
 /**
+ * Use {@link io.druid.discovery.DruidNodeDiscovery} for discovery.
  */
+@Deprecated
 public class ServerDiscoveryFactory
 {
   private final ServiceDiscovery<Void> serviceDiscovery;
@@ -75,7 +77,8 @@ public class ServerDiscoveryFactory
     }
 
     @Override
-    public void noteError(ServiceInstance<T> tServiceInstance) {
+    public void noteError(ServiceInstance<T> tServiceInstance)
+    {
       // do nothing
     }
 

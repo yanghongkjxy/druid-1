@@ -21,12 +21,14 @@ package io.druid.segment;
 
 import io.druid.segment.column.ColumnDescriptor;
 
+import java.io.IOException;
+
 /**
  * Processing related interface
  *
  * DimensionMerger subclass to be used with IndexMergerV9.
  */
-public interface DimensionMergerV9<EncodedTypeArray> extends DimensionMerger<EncodedTypeArray>
+public interface DimensionMergerV9<EncodedKeyComponentType> extends DimensionMerger<EncodedKeyComponentType>
 {
   /**
    * Return a ColumnDescriptor containing ColumnPartSerde objects appropriate for
@@ -34,5 +36,5 @@ public interface DimensionMergerV9<EncodedTypeArray> extends DimensionMerger<Enc
    *
    * @return ColumnDescriptor that IndexMergerV9 will use to build a column.
    */
-  public ColumnDescriptor makeColumnDescriptor();
+  ColumnDescriptor makeColumnDescriptor() throws IOException;
 }

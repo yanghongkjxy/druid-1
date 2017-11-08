@@ -27,6 +27,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
+import java.util.HashMap;
 import java.util.Map;
 
 public class JavaScriptPostAggregatorTest
@@ -49,7 +50,7 @@ public class JavaScriptPostAggregatorTest
         "absPercent",
         Lists.newArrayList("delta", "total"),
         absPercentFunction,
-        JavaScriptConfig.getDefault()
+        JavaScriptConfig.getEnabledInstance()
     );
 
     Assert.assertEquals(10.0, javaScriptPostAggregator.compute(metricValues));
@@ -58,19 +59,16 @@ public class JavaScriptPostAggregatorTest
   @Test
   public void testComputeJavaScriptNotAllowed()
   {
-    JavaScriptPostAggregator javaScriptPostAggregator;
-
     String absPercentFunction = "function(delta, total) { return 100 * Math.abs(delta) / total; }";
-    javaScriptPostAggregator = new JavaScriptPostAggregator(
+    JavaScriptPostAggregator aggregator = new JavaScriptPostAggregator(
         "absPercent",
         Lists.newArrayList("delta", "total"),
         absPercentFunction,
-        new JavaScriptConfig(true)
+        new JavaScriptConfig(false)
     );
 
     expectedException.expect(IllegalStateException.class);
     expectedException.expectMessage("JavaScript is disabled");
-    javaScriptPostAggregator.compute(Maps.<String, Object>newHashMap());
-    Assert.assertTrue(false);
+    aggregator.compute(new HashMap<>());
   }
 }

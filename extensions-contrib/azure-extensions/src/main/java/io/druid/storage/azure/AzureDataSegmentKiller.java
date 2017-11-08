@@ -28,6 +28,7 @@ import io.druid.segment.loading.DataSegmentKiller;
 import io.druid.segment.loading.SegmentLoadingException;
 import io.druid.timeline.DataSegment;
 
+import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Paths;
 import java.util.Map;
@@ -59,12 +60,18 @@ public class AzureDataSegmentKiller implements DataSegmentKiller
     try {
       azureStorage.emptyCloudBlobDirectory(containerName, dirPath);
     }
-    catch(StorageException e){
+    catch (StorageException e) {
       throw new SegmentLoadingException(e, "Couldn't kill segment[%s]: [%s]", segment.getIdentifier(), e.getExtendedErrorInformation() == null ? null : e.getExtendedErrorInformation().getErrorMessage());
     }
     catch (URISyntaxException e) {
       throw new SegmentLoadingException(e, "Couldn't kill segment[%s]: [%s]", segment.getIdentifier(), e.getReason());
     }
+  }
+
+  @Override
+  public void killAll() throws IOException
+  {
+    throw new UnsupportedOperationException("not implemented");
   }
 
 }

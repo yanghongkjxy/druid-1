@@ -21,34 +21,52 @@ package io.druid.query.groupby.epinephelinae;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.base.Preconditions;
+import io.druid.java.util.common.parsers.CloseableIterator;
+import io.druid.query.aggregation.AggregatorFactory;
 
 import java.io.Closeable;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.Iterator;
+import java.util.Comparator;
+import java.util.List;
+import java.util.function.ToIntFunction;
 
 /**
  * Groupers aggregate metrics from rows that they typically get from a ColumnSelectorFactory, under
  * grouping keys that some outside driver is passing in. They can also iterate over the grouped
  * rows after the aggregation is done.
- *
+ * <p>
  * They work sort of like a map of KeyType to aggregated values, except they don't support
  * random lookups.
  *
  * @param <KeyType> type of the key that will be passed in
  */
-public interface Grouper<KeyType extends Comparable<KeyType>> extends Closeable
+public interface Grouper<KeyType> extends Closeable
 {
+  /**
+   * Initialize the grouper.
+   * This method needs to be called before calling {@link #aggregate(Object)} and {@link #aggregate(Object, int)}.
+   */
+  void init();
+
+  /**
+   * Check this grouper is initialized or not.
+   *
+   * @return true if the grouper is already initialized, otherwise false.
+   */
+  boolean isInitialized();
+
   /**
    * Aggregate the current row with the provided key. Some implementations are thread-safe and
    * some are not.
    *
    * @param key     key object
-   * @param keyHash result of {@link Groupers#hash(Object)} on the key
+   * @param keyHash result of {@link #hashFunction()} on the key
    *
-   * @return true if the row was aggregated, false if not due to hitting resource limits
+   * @return result that is ok if the row was aggregated, not ok if a resource limit was hit
    */
-  boolean aggregate(KeyType key, int keyHash);
+  AggregateResult aggregate(KeyType key, int keyHash);
 
   /**
    * Aggregate the current row with the provided key. Some implementations are thread-safe and
@@ -56,14 +74,23 @@ public interface Grouper<KeyType extends Comparable<KeyType>> extends Closeable
    *
    * @param key key
    *
-   * @return true if the row was aggregated, false if not due to hitting resource limits
+   * @return result that is ok if the row was aggregated, not ok if a resource limit was hit
    */
-  boolean aggregate(KeyType key);
+  default AggregateResult aggregate(KeyType key)
+  {
+    Preconditions.checkNotNull(key, "key");
+    return aggregate(key, hashFunction().applyAsInt(key));
+  }
 
   /**
    * Reset the grouper to its initial state.
    */
   void reset();
+
+  default ToIntFunction<KeyType> hashFunction()
+  {
+    return Groupers::hash;
+  }
 
   /**
    * Close the grouper and release associated resources.
@@ -72,21 +99,25 @@ public interface Grouper<KeyType extends Comparable<KeyType>> extends Closeable
   void close();
 
   /**
-   * Iterate through entries. If a comparator is provided, do a sorted iteration.
-   *
-   * Once this method is called, writes are no longer safe. After you are done with the iterator returned by this
-   * method, you should either call {@link #close()} (if you are done with the Grouper), {@link #reset()} (if you
-   * want to reuse it), or {@link #iterator(boolean)} again if you want another iterator.
-   *
+   * Iterate through entries.
+   * <p>
+   * Some implementations allow writes even after this method is called.  After you are done with the iterator
+   * returned by this method, you should either call {@link #close()} (if you are done with the Grouper) or
+   * {@link #reset()} (if you want to reuse it).  Some implementations allow calling {@link #iterator(boolean)} again if
+   * you want another iterator. But, this method must not be called by multiple threads concurrently.
+   * <p>
    * If "sorted" is true then the iterator will return sorted results. It will use KeyType's natural ordering on
    * deserialized objects, and will use the {@link KeySerde#comparator()} on serialized objects. Woe be unto you
    * if these comparators are not equivalent.
+   * <p>
+   * Callers must process and discard the returned {@link Entry}s immediately because some implementations can reuse the
+   * key objects.
    *
    * @param sorted return sorted results
    *
    * @return entry iterator
    */
-  Iterator<Entry<KeyType>> iterator(final boolean sorted);
+  CloseableIterator<Entry<KeyType>> iterator(boolean sorted);
 
   class Entry<T>
   {
@@ -156,9 +187,32 @@ public interface Grouper<KeyType extends Comparable<KeyType>> extends Closeable
   interface KeySerdeFactory<T>
   {
     /**
-     * Create a new KeySerde, which may be stateful.
+     * Return max dictionary size threshold.
+     *
+     * @return max dictionary size
+     */
+    long getMaxDictionarySize();
+
+    /**
+     * Create a new {@link KeySerde}, which may be stateful.
      */
     KeySerde<T> factorize();
+
+    /**
+     * Create a new {@link KeySerde} with the given dictionary.
+     */
+    KeySerde<T> factorizeWithDictionary(List<String> dictionary);
+
+    /**
+     * Return an object that knows how to compare two serialized key instances. Will be called by the
+     * {@link #iterator(boolean)} method if sorting is enabled.
+     *
+     * @param forceDefaultOrder Return a comparator that sorts by the key in default lexicographic ascending order,
+     *                          regardless of any other conditions (e.g., presence of OrderBySpecs).
+     *
+     * @return comparator for key objects.
+     */
+    Comparator<Grouper.Entry<T>> objectComparator(boolean forceDefaultOrder);
   }
 
   /**
@@ -177,9 +231,14 @@ public interface Grouper<KeyType extends Comparable<KeyType>> extends Closeable
     Class<T> keyClazz();
 
     /**
+     * Return the dictionary of this KeySerde.  The return value should not be null.
+     */
+    List<String> getDictionary();
+
+    /**
      * Serialize a key. This will be called by the {@link #aggregate(Comparable)} method. The buffer will not
      * be retained after the aggregate method returns, so reusing buffers is OK.
-     *
+     * <p>
      * This method may return null, which indicates that some internal resource limit has been reached and
      * no more keys can be generated. In this situation you can call {@link #reset()} and try again, although
      * beware the caveats on that method.
@@ -206,16 +265,28 @@ public interface Grouper<KeyType extends Comparable<KeyType>> extends Closeable
      *
      * @return comparator for keys
      */
-    KeyComparator comparator();
+    BufferComparator bufferComparator();
+
+    /**
+     * When pushing down limits, it may also be necessary to compare aggregated values along with the key
+     * using the bufferComparator.
+     *
+     * @param aggregatorFactories Array of aggregators from a GroupByQuery
+     * @param aggregatorOffsets Offsets for each aggregator in aggregatorFactories pointing to their location
+     *                          within the grouping key + aggs buffer.
+     *
+     * @return comparator for keys + aggs
+     */
+    BufferComparator bufferComparatorWithAggregators(AggregatorFactory[] aggregatorFactories, int[] aggregatorOffsets);
 
     /**
      * Reset the keySerde to its initial state. After this method is called, {@link #fromByteBuffer(ByteBuffer, int)}
-     * and {@link #comparator()} may no longer work properly on previously-serialized keys.
+     * and {@link #bufferComparator()} may no longer work properly on previously-serialized keys.
      */
     void reset();
   }
 
-  interface KeyComparator
+  interface BufferComparator
   {
     int compare(ByteBuffer lhsBuffer, ByteBuffer rhsBuffer, int lhsPosition, int rhsPosition);
   }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to Metamarkets Group Inc. (Metamarkets) under one
  * or more contributor license agreements. See the NOTICE file
  * distributed with this work for additional information
@@ -76,7 +76,7 @@ public class SketchEstimateWithErrorBounds
     return "SketchEstimateWithErrorBounds{" +
         "estimate=" + Double.toString(estimate) +
         ", highBound=" + Double.toString(highBound) +
-        ", lowBound="+ Double.toString(lowBound) +
+        ", lowBound=" + Double.toString(lowBound) +
         ", numStdDev=" + Integer.toString(numStdDev) +
         "}";
   }
@@ -105,7 +105,7 @@ public class SketchEstimateWithErrorBounds
     if (estimate != that.estimate ||
         highBound != that.highBound ||
         lowBound != that.lowBound ||
-        numStdDev != numStdDev) {
+        numStdDev != that.numStdDev) {
       return false;
     }
     return true;

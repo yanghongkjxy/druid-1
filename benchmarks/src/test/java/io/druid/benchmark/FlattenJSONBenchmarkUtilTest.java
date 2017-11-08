@@ -1,3 +1,22 @@
+/*
+ * Licensed to Metamarkets Group Inc. (Metamarkets) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. Metamarkets licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 package io.druid.benchmark;
 
 import org.junit.Assert;
@@ -10,7 +29,8 @@ import java.util.Map;
 public class FlattenJSONBenchmarkUtilTest
 {
   @Test
-  public void testOne() throws Exception {
+  public void testOne() throws Exception
+  {
     FlattenJSONBenchmarkUtil eventGen = new FlattenJSONBenchmarkUtil();
 
     String newEvent = eventGen.generateFlatEvent();
@@ -18,15 +38,19 @@ public class FlattenJSONBenchmarkUtilTest
 
     Parser flatParser = eventGen.getFlatParser();
     Parser nestedParser = eventGen.getNestedParser();
+    Parser jqParser = eventGen.getJqParser();
 
     Map<String, Object> event = flatParser.parse(newEvent);
     Map<String, Object> event2 = nestedParser.parse(newEvent2);
+    Map<String, Object> event3 = jqParser.parse(newEvent2);  // reuse the same event as "nested"
 
     checkEvent1(event);
     checkEvent2(event2);
+    checkEvent2(event3); // make sure JQ parser output matches with JSONPath parser output
   }
 
-  public void checkEvent1(Map<String, Object> event) {
+  public void checkEvent1(Map<String, Object> event)
+  {
     Assert.assertEquals("2015-09-12T12:10:53.155Z", event.get("ts").toString());
     Assert.assertEquals("-1170723877", event.get("d1").toString());
     Assert.assertEquals("238976084", event.get("d2").toString());
@@ -55,7 +79,8 @@ public class FlattenJSONBenchmarkUtilTest
     Assert.assertEquals("1414285347", event.get("ae1[2].e1.d2").toString());
   }
 
-  public void checkEvent2(Map<String, Object> event2) {
+  public void checkEvent2(Map<String, Object> event2)
+  {
     Assert.assertEquals("728062074", event2.get("ae1[0].d1").toString());
     Assert.assertEquals("1701675101", event2.get("ae1[1].d1").toString());
     Assert.assertEquals("1887775139", event2.get("ae1[2].e1.d2").toString());

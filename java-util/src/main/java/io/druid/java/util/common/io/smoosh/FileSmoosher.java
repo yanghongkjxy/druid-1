@@ -25,12 +25,15 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.io.ByteStreams;
-import com.google.common.io.Closer;
 import com.google.common.primitives.Ints;
 import io.druid.java.util.common.FileUtils;
 import io.druid.java.util.common.IAE;
+import io.druid.java.util.common.IOE;
 import io.druid.java.util.common.ISE;
 import io.druid.java.util.common.MappedByteBufferHandler;
+import io.druid.java.util.common.StringUtils;
+import io.druid.java.util.common.io.Closer;
+import io.druid.java.util.common.logger.Logger;
 
 import java.io.BufferedWriter;
 import java.io.Closeable;
@@ -45,7 +48,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.GatheringByteChannel;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -59,7 +62,9 @@ import java.util.Set;
  * various "chunk" files will be varying sizes and it is not possible to add a
  * file of size greater than Integer.MAX_VALUE.
  * <p/>
- * This class is not thread safe but allows writing multiple files even if main
+ * This class is not thread safe.
+ * <p/>
+ * This class allows writing multiple files even if main
  * smoosh file writer is open. If main smoosh file writer is already open, it
  * delegates the write into temporary file on the file system which is later
  * copied on to the main smoosh file and underlying temporary file will be
@@ -69,6 +74,7 @@ public class FileSmoosher implements Closeable
 {
   private static final String FILE_EXTENSION = "smoosh";
   private static final Joiner joiner = Joiner.on(",");
+  private static final Logger LOG = new Logger(FileSmoosher.class);
 
   private final File baseDir;
   private final int maxChunkSize;
@@ -101,6 +107,16 @@ public class FileSmoosher implements Closeable
     Preconditions.checkArgument(maxChunkSize > 0, "maxChunkSize must be a positive value.");
   }
 
+  static File metaFile(File baseDir)
+  {
+    return new File(baseDir, StringUtils.format("meta.%s", FILE_EXTENSION));
+  }
+
+  static File makeChunkFile(File baseDir, int i)
+  {
+    return new File(baseDir, StringUtils.format("%05d.%s", i, FILE_EXTENSION));
+  }
+
   public Set<String> getInternalFilenames()
   {
     return internalFiles.keySet();
@@ -120,7 +136,7 @@ public class FileSmoosher implements Closeable
 
   public void add(String name, ByteBuffer bufferToAdd) throws IOException
   {
-    add(name, Arrays.asList(bufferToAdd));
+    add(name, Collections.singletonList(bufferToAdd));
   }
 
   public void add(String name, List<ByteBuffer> bufferToAdd) throws IOException
@@ -155,8 +171,7 @@ public class FileSmoosher implements Closeable
     // If current writer is in use then create a new SmooshedWriter which
     // writes into temporary file which is later merged into original
     // FileSmoosher.
-    if (writerCurrentlyInUse)
-    {
+    if (writerCurrentlyInUse) {
       return delegateSmooshedWriter(name, size);
     }
 
@@ -230,9 +245,7 @@ public class FileSmoosher implements Closeable
           throw new ISE("WTF? Perhaps there is some concurrent modification going on?");
         }
         if (bytesWritten != size) {
-          throw new IOException(
-              String.format("Expected [%,d] bytes, only saw [%,d], potential corruption?", size, bytesWritten)
-          );
+          throw new IOE("Expected [%,d] bytes, only saw [%,d], potential corruption?", size, bytesWritten);
         }
         // Merge temporary files on to the main smoosh file.
         mergeWithSmoosher();
@@ -251,10 +264,11 @@ public class FileSmoosher implements Closeable
     // Get processed elements from the stack and write.
     List<File> fileToProcess = new ArrayList<>(completedFiles);
     completedFiles = Lists.newArrayList();
-    for (File file: fileToProcess)
-    {
+    for (File file : fileToProcess) {
       add(file);
-      file.delete();
+      if (!file.delete()) {
+        LOG.warn("Unable to delete file [%s]", file);
+      }
     }
   }
 
@@ -265,7 +279,9 @@ public class FileSmoosher implements Closeable
    *
    * @param name fileName
    * @param size size of the file.
+   *
    * @return
+   *
    * @throws IOException
    */
   private SmooshedWriter delegateSmooshedWriter(final String name, final long size) throws IOException
@@ -275,14 +291,17 @@ public class FileSmoosher implements Closeable
 
     return new SmooshedWriter()
     {
-      private int currOffset = 0;
       private final FileOutputStream out = new FileOutputStream(tmpFile);
-      private final GatheringByteChannel channel = out.getChannel();;
+      private final GatheringByteChannel channel = out.getChannel();
       private final Closer closer = Closer.create();
+
+      private int currOffset = 0;
+
       {
         closer.register(out);
         closer.register(channel);
       }
+
       @Override
       public void close() throws IOException
       {
@@ -294,6 +313,7 @@ public class FileSmoosher implements Closeable
           mergeWithSmoosher();
         }
       }
+
       public int bytesLeft()
       {
         return (int) (size - currOffset);
@@ -347,17 +367,21 @@ public class FileSmoosher implements Closeable
   public void close() throws IOException
   {
     //book keeping checks on created file.
-    if (!completedFiles.isEmpty() || !filesInProcess.isEmpty())
-    {
-      for (File file: completedFiles)
-      {
-        file.delete();
+    if (!completedFiles.isEmpty() || !filesInProcess.isEmpty()) {
+      for (File file : completedFiles) {
+        if (!file.delete()) {
+          LOG.warn("Unable to delete file [%s]", file);
+        }
       }
-      for (File file: filesInProcess)
-      {
-        file.delete();
+      for (File file : filesInProcess) {
+        if (!file.delete()) {
+          LOG.warn("Unable to delete file [%s]", file);
+        }
       }
-      throw new ISE(String.format("%d writers needs to be closed before closing smoosher.", filesInProcess.size() + completedFiles.size()));
+      throw new ISE(
+          "[%d] writers in progress and [%d] completed writers needs to be closed before closing smoosher.",
+          filesInProcess.size(), completedFiles.size()
+      );
     }
 
     if (currOut != null) {
@@ -367,7 +391,7 @@ public class FileSmoosher implements Closeable
     File metaFile = metaFile(baseDir);
 
     try (Writer out = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(metaFile), Charsets.UTF_8))) {
-      out.write(String.format("v1,%d,%d", maxChunkSize, outFiles.size()));
+      out.write(StringUtils.format("v1,%d,%d", maxChunkSize, outFiles.size()));
       out.write("\n");
 
       for (Map.Entry<String, Metadata> entry : internalFiles.entrySet()) {
@@ -390,35 +414,27 @@ public class FileSmoosher implements Closeable
     final int fileNum = outFiles.size();
     File outFile = makeChunkFile(baseDir, fileNum);
     outFiles.add(outFile);
-    return new Outer(fileNum, new FileOutputStream(outFile), maxChunkSize);
-  }
-
-  static File metaFile(File baseDir)
-  {
-    return new File(baseDir, String.format("meta.%s", FILE_EXTENSION));
-  }
-
-  static File makeChunkFile(File baseDir, int i)
-  {
-    return new File(baseDir, String.format("%05d.%s", i, FILE_EXTENSION));
+    return new Outer(fileNum, outFile, maxChunkSize);
   }
 
   public static class Outer implements SmooshedWriter
   {
     private final int fileNum;
     private final int maxLength;
+    private final File outFile;
     private final GatheringByteChannel channel;
 
     private final Closer closer = Closer.create();
     private int currOffset = 0;
 
-    Outer(int fileNum, FileOutputStream output, int maxLength)
+    Outer(int fileNum, File outFile, int maxLength) throws FileNotFoundException
     {
       this.fileNum = fileNum;
-      this.channel = output.getChannel();
+      this.outFile = outFile;
       this.maxLength = maxLength;
-      closer.register(output);
-      closer.register(channel);
+
+      FileOutputStream outStream = closer.register(new FileOutputStream(outFile));
+      this.channel = closer.register(outStream.getChannel());
     }
 
     public int getFileNum()
@@ -480,6 +496,7 @@ public class FileSmoosher implements Closeable
     public void close() throws IOException
     {
       closer.close();
+      FileSmoosher.LOG.info("Created smoosh file [%s] of size [%s] bytes.", outFile.getAbsolutePath(), outFile.length());
     }
   }
 }

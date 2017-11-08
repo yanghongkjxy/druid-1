@@ -39,6 +39,7 @@ import io.druid.query.aggregation.PostAggregator;
 import io.druid.query.dimension.DimensionSpec;
 import io.druid.query.ordering.StringComparator;
 import io.druid.query.ordering.StringComparators;
+import io.druid.segment.column.ValueType;
 
 import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
@@ -55,6 +56,35 @@ public class DefaultLimitSpec implements LimitSpec
 
   private final List<OrderByColumnSpec> columns;
   private final int limit;
+
+  /**
+   * Check if a limitSpec has columns in the sorting order that are not part of the grouping fields represented
+   * by `dimensions`.
+   *
+   * @param limitSpec LimitSpec, assumed to be non-null
+   * @param dimensions Grouping fields for a groupBy query
+   * @return True if limitSpec has sorting columns not contained in dimensions
+   */
+  public static boolean sortingOrderHasNonGroupingFields(DefaultLimitSpec limitSpec, List<DimensionSpec> dimensions)
+  {
+    for (OrderByColumnSpec orderSpec : limitSpec.getColumns()) {
+      int dimIndex = OrderByColumnSpec.getDimIndexForOrderBy(orderSpec, dimensions);
+      if (dimIndex < 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public static StringComparator getComparatorForDimName(DefaultLimitSpec limitSpec, String dimName)
+  {
+    final OrderByColumnSpec orderBy = OrderByColumnSpec.getOrderByForDimName(limitSpec.getColumns(), dimName);
+    if (orderBy == null) {
+      return null;
+    }
+
+    return orderBy.getDimensionComparator();
+  }
 
   @JsonCreator
   public DefaultLimitSpec(
@@ -78,6 +108,11 @@ public class DefaultLimitSpec implements LimitSpec
   public int getLimit()
   {
     return limit;
+  }
+
+  public boolean isLimited()
+  {
+    return limit < Integer.MAX_VALUE;
   }
 
   @Override
@@ -107,10 +142,25 @@ public class DefaultLimitSpec implements LimitSpec
       for (int i = 0; i < columns.size(); i++) {
         final OrderByColumnSpec columnSpec = columns.get(i);
 
+        if (aggAndPostAggNames.contains(columnSpec.getDimension())) {
+          sortingNeeded = true;
+          break;
+        }
+
+        final ValueType columnType = getOrderByType(columnSpec, dimensions);
+        final StringComparator naturalComparator;
+        if (columnType == ValueType.STRING) {
+          naturalComparator = StringComparators.LEXICOGRAPHIC;
+        } else if (ValueType.isNumeric(columnType)) {
+          naturalComparator = StringComparators.NUMERIC;
+        } else {
+          sortingNeeded = true;
+          break;
+        }
+
         if (columnSpec.getDirection() != OrderByColumnSpec.Direction.ASCENDING
-            || !columnSpec.getDimensionComparator().equals(StringComparators.LEXICOGRAPHIC)
-            || !columnSpec.getDimension().equals(dimensions.get(i).getOutputName())
-            || aggAndPostAggNames.contains(columnSpec.getDimension())) {
+            || !columnSpec.getDimensionComparator().equals(naturalComparator)
+            || !columnSpec.getDimension().equals(dimensions.get(i).getOutputName())) {
           sortingNeeded = true;
           break;
         }
@@ -118,16 +168,16 @@ public class DefaultLimitSpec implements LimitSpec
     }
 
     if (!sortingNeeded) {
-      return limit == Integer.MAX_VALUE ? Functions.<Sequence<Row>>identity() : new LimitingFn(limit);
+      return isLimited() ? new LimitingFn(limit) : Functions.identity();
     }
 
     // Materialize the Comparator first for fast-fail error checking.
     final Ordering<Row> ordering = makeComparator(dimensions, aggs, postAggs);
 
-    if (limit == Integer.MAX_VALUE) {
-      return new SortingFn(ordering);
-    } else {
+    if (isLimited()) {
       return new TopNFunction(ordering, limit);
+    } else {
+      return new SortingFn(ordering);
     }
   }
 
@@ -135,6 +185,17 @@ public class DefaultLimitSpec implements LimitSpec
   public LimitSpec merge(LimitSpec other)
   {
     return this;
+  }
+
+  private ValueType getOrderByType(final OrderByColumnSpec columnSpec, final List<DimensionSpec> dimensions)
+  {
+    for (DimensionSpec dimSpec : dimensions) {
+      if (columnSpec.getDimension().equals(dimSpec.getOutputName())) {
+        return dimSpec.getOutputType();
+      }
+    }
+
+    throw new ISE("Unknown column in order clause[%s]", columnSpec);
   }
 
   private Ordering<Row> makeComparator(
@@ -181,9 +242,8 @@ public class DefaultLimitSpec implements LimitSpec
         throw new ISE("Unknown column in order clause[%s]", columnSpec);
       }
 
-      switch (columnSpec.getDirection()) {
-        case DESCENDING:
-          nextOrdering = nextOrdering.reverse();
+      if (columnSpec.getDirection() == OrderByColumnSpec.Direction.DESCENDING) {
+        nextOrdering = nextOrdering.reverse();
       }
 
       ordering = ordering.compound(nextOrdering);
@@ -194,33 +254,12 @@ public class DefaultLimitSpec implements LimitSpec
 
   private Ordering<Row> metricOrdering(final String column, final Comparator comparator)
   {
-    return new Ordering<Row>()
-    {
-      @SuppressWarnings("unchecked")
-      @Override
-      public int compare(Row left, Row right)
-      {
-        return comparator.compare(left.getRaw(column), right.getRaw(column));
-      }
-    };
+    return Ordering.from(Comparator.comparing((Row row) -> row.getRaw(column), Comparator.nullsLast(comparator)));
   }
 
   private Ordering<Row> dimensionOrdering(final String dimension, final StringComparator comparator)
   {
-    return Ordering.from(comparator)
-                   .nullsFirst()
-                   .onResultOf(
-                       new Function<Row, String>()
-                       {
-                         @Override
-                         public String apply(Row input)
-                         {
-                           // Multi-value dimensions have all been flattened at this point;
-                           final List<String> dimList = input.getDimension(dimension);
-                           return dimList.isEmpty() ? null : dimList.get(0);
-                         }
-                       }
-                   );
+    return Ordering.from(Comparator.comparing((Row row) -> row.getDimension(dimension).isEmpty() ? null : row.getDimension(dimension).get(0), Comparator.nullsFirst(comparator)));
   }
 
   @Override

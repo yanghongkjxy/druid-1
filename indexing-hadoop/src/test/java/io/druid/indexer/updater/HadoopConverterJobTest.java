@@ -32,7 +32,6 @@ import io.druid.data.input.impl.DelimitedParseSpec;
 import io.druid.data.input.impl.DimensionsSpec;
 import io.druid.data.input.impl.StringInputRowParser;
 import io.druid.data.input.impl.TimestampSpec;
-import io.druid.granularity.QueryGranularities;
 import io.druid.indexer.HadoopDruidDetermineConfigurationJob;
 import io.druid.indexer.HadoopDruidIndexerConfig;
 import io.druid.indexer.HadoopDruidIndexerJob;
@@ -43,7 +42,8 @@ import io.druid.indexer.JobHelper;
 import io.druid.indexer.Jobby;
 import io.druid.indexer.SQLMetadataStorageUpdaterJobHandler;
 import io.druid.java.util.common.FileUtils;
-import io.druid.java.util.common.Granularity;
+import io.druid.java.util.common.Intervals;
+import io.druid.java.util.common.granularity.Granularities;
 import io.druid.metadata.MetadataSegmentManagerConfig;
 import io.druid.metadata.MetadataStorageConnectorConfig;
 import io.druid.metadata.MetadataStorageTablesConfig;
@@ -104,7 +104,7 @@ public class HadoopConverterJobTest
   private Supplier<MetadataStorageTablesConfig> metadataStorageTablesConfigSupplier;
   private DerbyConnector connector;
 
-  private final Interval interval = Interval.parse("2011-01-01T00:00:00.000Z/2011-05-01T00:00:00.000Z");
+  private final Interval interval = Intervals.of("2011-01-01T00:00:00.000Z/2011-05-01T00:00:00.000Z");
 
   @After
   public void tearDown()
@@ -165,21 +165,24 @@ public class HadoopConverterJobTest
                             new DimensionsSpec(DimensionsSpec.getDefaultSchemas(Arrays.asList(TestIndex.DIMENSIONS)), null, null),
                             "\t",
                             "\u0001",
-                            Arrays.asList(TestIndex.COLUMNS)
+                            Arrays.asList(TestIndex.COLUMNS),
+                            false,
+                            0
                         ),
                         null
                     ),
                     Map.class
                 ),
                 new AggregatorFactory[]{
-                    new DoubleSumAggregatorFactory(TestIndex.METRICS[0], TestIndex.METRICS[0]),
+                    new DoubleSumAggregatorFactory(TestIndex.DOUBLE_METRICS[0], TestIndex.DOUBLE_METRICS[0]),
                     new HyperUniquesAggregatorFactory("quality_uniques", "quality")
                 },
                 new UniformGranularitySpec(
-                    Granularity.MONTH,
-                    QueryGranularities.DAY,
+                    Granularities.MONTH,
+                    Granularities.DAY,
                     ImmutableList.<Interval>of(interval)
                 ),
+                null,
                 HadoopDruidIndexerConfig.JSON_MAPPER
             ),
             new HadoopIOConfig(
@@ -208,7 +211,8 @@ public class HadoopConverterJobTest
                 null,
                 null,
                 false,
-                false
+                false,
+                null
             )
         )
     );

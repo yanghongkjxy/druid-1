@@ -22,14 +22,14 @@ package io.druid.query;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
-import io.druid.granularity.QueryGranularity;
-import io.druid.java.util.common.guava.ResourceClosingSequence;
+import io.druid.java.util.common.granularity.Granularity;
 import io.druid.java.util.common.guava.Sequence;
 import io.druid.java.util.common.guava.Sequences;
 import io.druid.java.util.common.logger.Logger;
 import io.druid.query.filter.Filter;
 import io.druid.segment.Cursor;
 import io.druid.segment.StorageAdapter;
+import io.druid.segment.VirtualColumns;
 import org.joda.time.Interval;
 
 import java.io.Closeable;
@@ -46,8 +46,9 @@ public class QueryRunnerHelper
       final StorageAdapter adapter,
       List<Interval> queryIntervals,
       Filter filter,
+      VirtualColumns virtualColumns,
       boolean descending,
-      QueryGranularity granularity,
+      Granularity granularity,
       final Function<Cursor, Result<T>> mapFn
   )
   {
@@ -57,13 +58,12 @@ public class QueryRunnerHelper
 
     return Sequences.filter(
         Sequences.map(
-            adapter.makeCursors(filter, queryIntervals.get(0), granularity, descending),
+            adapter.makeCursors(filter, queryIntervals.get(0), virtualColumns, granularity, descending, null),
             new Function<Cursor, Result<T>>()
             {
               @Override
               public Result<T> apply(Cursor input)
               {
-                log.debug("Running over cursor[%s]", adapter.getInterval(), input.getTime());
                 return mapFn.apply(input);
               }
             }
@@ -72,13 +72,14 @@ public class QueryRunnerHelper
     );
   }
 
-  public static <T>  QueryRunner<T> makeClosingQueryRunner(final QueryRunner<T> runner, final Closeable closeable){
+  public static <T> QueryRunner<T> makeClosingQueryRunner(final QueryRunner<T> runner, final Closeable closeable)
+  {
     return new QueryRunner<T>()
     {
       @Override
-      public Sequence<T> run(Query<T> query, Map<String, Object> responseContext)
+      public Sequence<T> run(QueryPlus<T> queryPlus, Map<String, Object> responseContext)
       {
-        return new ResourceClosingSequence<>(runner.run(query, responseContext), closeable);
+        return Sequences.withBaggage(runner.run(queryPlus, responseContext), closeable);
       }
     };
   }

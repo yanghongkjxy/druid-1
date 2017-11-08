@@ -20,58 +20,60 @@
 package io.druid.query.extraction;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.druid.granularity.QueryGranularities;
-import io.druid.granularity.QueryGranularity;
 import io.druid.jackson.DefaultObjectMapper;
-import org.joda.time.DateTime;
+import io.druid.java.util.common.DateTimes;
+import io.druid.java.util.common.granularity.Granularities;
+import io.druid.java.util.common.granularity.Granularity;
 import org.joda.time.DateTimeZone;
 import org.junit.Assert;
 import org.junit.Test;
+
+import java.util.Arrays;
 
 public class TimeFormatExtractionFnTest
 {
 
   private static final long[] timestamps = {
-      new DateTime("2015-01-01T23:00:00Z").getMillis(),
-      new DateTime("2015-01-02T23:00:00Z").getMillis(),
-      new DateTime("2015-03-03T23:00:00Z").getMillis(),
-      new DateTime("2015-03-04T23:00:00Z").getMillis(),
-      new DateTime("2015-05-02T23:00:00Z").getMillis(),
-      new DateTime("2015-12-21T23:00:00Z").getMillis()
+      DateTimes.of("2015-01-01T23:00:00Z").getMillis(),
+      DateTimes.of("2015-01-02T23:00:00Z").getMillis(),
+      DateTimes.of("2015-03-03T23:00:00Z").getMillis(),
+      DateTimes.of("2015-03-04T23:00:00Z").getMillis(),
+      DateTimes.of("2015-05-02T23:00:00Z").getMillis(),
+      DateTimes.of("2015-12-21T23:00:00Z").getMillis()
   };
 
   @Test
   public void testDayOfWeekExtraction() throws Exception
   {
-    TimeFormatExtractionFn fn = new TimeFormatExtractionFn("EEEE", null, null, null);
-    Assert.assertEquals("Thursday",  fn.apply(timestamps[0]));
-    Assert.assertEquals("Friday",    fn.apply(timestamps[1]));
-    Assert.assertEquals("Tuesday",   fn.apply(timestamps[2]));
+    TimeFormatExtractionFn fn = new TimeFormatExtractionFn("EEEE", null, null, null, false);
+    Assert.assertEquals("Thursday", fn.apply(timestamps[0]));
+    Assert.assertEquals("Friday", fn.apply(timestamps[1]));
+    Assert.assertEquals("Tuesday", fn.apply(timestamps[2]));
     Assert.assertEquals("Wednesday", fn.apply(timestamps[3]));
-    Assert.assertEquals("Saturday",  fn.apply(timestamps[4]));
-    Assert.assertEquals("Monday",    fn.apply(timestamps[5]));
+    Assert.assertEquals("Saturday", fn.apply(timestamps[4]));
+    Assert.assertEquals("Monday", fn.apply(timestamps[5]));
 
-    testSerde(fn, "EEEE", null, null, QueryGranularities.NONE);
+    testSerde(fn, "EEEE", null, null, Granularities.NONE);
   }
 
   @Test
   public void testLocalizedExtraction() throws Exception
   {
-    TimeFormatExtractionFn fn = new TimeFormatExtractionFn("EEEE", null, "is", null);
-    Assert.assertEquals("fimmtudagur",  fn.apply(timestamps[0]));
-    Assert.assertEquals("föstudagur",   fn.apply(timestamps[1]));
-    Assert.assertEquals("þriðjudagur",  fn.apply(timestamps[2]));
+    TimeFormatExtractionFn fn = new TimeFormatExtractionFn("EEEE", null, "is", null, false);
+    Assert.assertEquals("fimmtudagur", fn.apply(timestamps[0]));
+    Assert.assertEquals("föstudagur", fn.apply(timestamps[1]));
+    Assert.assertEquals("þriðjudagur", fn.apply(timestamps[2]));
     Assert.assertEquals("miðvikudagur", fn.apply(timestamps[3]));
-    Assert.assertEquals("laugardagur",  fn.apply(timestamps[4]));
-    Assert.assertEquals("mánudagur",    fn.apply(timestamps[5]));
+    Assert.assertEquals("laugardagur", fn.apply(timestamps[4]));
+    Assert.assertEquals("mánudagur", fn.apply(timestamps[5]));
 
-    testSerde(fn, "EEEE", null, "is", QueryGranularities.NONE);
+    testSerde(fn, "EEEE", null, "is", Granularities.NONE);
   }
 
   @Test
   public void testGranularExtractionWithNullPattern() throws Exception
   {
-    TimeFormatExtractionFn fn = new TimeFormatExtractionFn(null, null, null, QueryGranularities.DAY);
+    TimeFormatExtractionFn fn = new TimeFormatExtractionFn(null, null, null, Granularities.DAY, false);
     Assert.assertEquals("2015-01-01T00:00:00.000Z", fn.apply(timestamps[0]));
     Assert.assertEquals("2015-01-02T00:00:00.000Z", fn.apply(timestamps[1]));
     Assert.assertEquals("2015-03-03T00:00:00.000Z", fn.apply(timestamps[2]));
@@ -79,7 +81,7 @@ public class TimeFormatExtractionFnTest
     Assert.assertEquals("2015-05-02T00:00:00.000Z", fn.apply(timestamps[4]));
     Assert.assertEquals("2015-12-21T00:00:00.000Z", fn.apply(timestamps[5]));
 
-    testSerde(fn, null, null, null, QueryGranularities.DAY);
+    testSerde(fn, null, null, null, Granularities.DAY);
   }
 
   @Test
@@ -89,16 +91,17 @@ public class TimeFormatExtractionFnTest
         "'In Berlin ist es schon 'EEEE",
         DateTimeZone.forID("Europe/Berlin"),
         "de",
-        null
+        null,
+        false
     );
-    Assert.assertEquals("In Berlin ist es schon Freitag",    fn.apply(timestamps[0]));
-    Assert.assertEquals("In Berlin ist es schon Samstag",    fn.apply(timestamps[1]));
-    Assert.assertEquals("In Berlin ist es schon Mittwoch",   fn.apply(timestamps[2]));
+    Assert.assertEquals("In Berlin ist es schon Freitag", fn.apply(timestamps[0]));
+    Assert.assertEquals("In Berlin ist es schon Samstag", fn.apply(timestamps[1]));
+    Assert.assertEquals("In Berlin ist es schon Mittwoch", fn.apply(timestamps[2]));
     Assert.assertEquals("In Berlin ist es schon Donnerstag", fn.apply(timestamps[3]));
-    Assert.assertEquals("In Berlin ist es schon Sonntag",    fn.apply(timestamps[4]));
-    Assert.assertEquals("In Berlin ist es schon Dienstag",   fn.apply(timestamps[5]));
+    Assert.assertEquals("In Berlin ist es schon Sonntag", fn.apply(timestamps[4]));
+    Assert.assertEquals("In Berlin ist es schon Dienstag", fn.apply(timestamps[5]));
 
-    testSerde(fn, "'In Berlin ist es schon 'EEEE", DateTimeZone.forID("Europe/Berlin"), "de", QueryGranularities.NONE);
+    testSerde(fn, "'In Berlin ist es schon 'EEEE", DateTimeZone.forID("Europe/Berlin"), "de", Granularities.NONE);
   }
 
   public void testSerde(
@@ -106,7 +109,7 @@ public class TimeFormatExtractionFnTest
       final String format,
       final DateTimeZone tz,
       final String locale,
-      final QueryGranularity granularity
+      final Granularity granularity
   ) throws Exception
   {
     final ObjectMapper objectMapper = new DefaultObjectMapper();
@@ -139,5 +142,45 @@ public class TimeFormatExtractionFnTest
             ExtractionFn.class
         )
     );
+  }
+
+  @Test
+  public void testCacheKey()
+  {
+    TimeFormatExtractionFn fn = new TimeFormatExtractionFn(
+        "'In Berlin ist es schon 'EEEE",
+        DateTimeZone.forID("Europe/Berlin"),
+        "de",
+        null,
+        false
+    );
+
+    TimeFormatExtractionFn fn2 = new TimeFormatExtractionFn(
+        "'In Berlin ist es schon 'EEEE",
+        DateTimeZone.forID("Europe/Berlin"),
+        "de",
+        null,
+        true
+    );
+
+    TimeFormatExtractionFn fn3 = new TimeFormatExtractionFn(
+        "'In Berlin ist es schon 'EEEE",
+        DateTimeZone.forID("Europe/Berlin"),
+        "de",
+        null,
+        true
+    );
+
+    TimeFormatExtractionFn fn4 = new TimeFormatExtractionFn(
+        null,
+        null,
+        null,
+        null,
+        false
+    );
+
+    Assert.assertFalse(Arrays.equals(fn.getCacheKey(), fn2.getCacheKey()));
+    Assert.assertFalse(Arrays.equals(fn.getCacheKey(), fn4.getCacheKey()));
+    Assert.assertTrue(Arrays.equals(fn2.getCacheKey(), fn3.getCacheKey()));
   }
 }

@@ -21,18 +21,15 @@ package io.druid.query.aggregation.datasketches.theta;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.yahoo.sketches.theta.Sketch;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.AggregatorFactoryNotMergeableException;
+import io.druid.query.aggregation.AggregatorUtil;
 
 import java.util.Collections;
 import java.util.List;
 
 public class SketchMergeAggregatorFactory extends SketchAggregatorFactory
 {
-
-  private static final byte CACHE_TYPE_ID = 15;
-
   private final boolean shouldFinalize;
   private final boolean isInputThetaSketch;
   private final Integer errorBoundsStdDev;
@@ -47,7 +44,7 @@ public class SketchMergeAggregatorFactory extends SketchAggregatorFactory
       @JsonProperty("errorBoundsStdDev") Integer errorBoundsStdDev
   )
   {
-    super(name, fieldName, size, CACHE_TYPE_ID);
+    super(name, fieldName, size, AggregatorUtil.SKETCH_MERGE_CACHE_TYPE_ID);
     this.shouldFinalize = (shouldFinalize == null) ? true : shouldFinalize.booleanValue();
     this.isInputThetaSketch = (isInputThetaSketch == null) ? false : isInputThetaSketch.booleanValue();
     this.errorBoundsStdDev = errorBoundsStdDev;
@@ -123,16 +120,11 @@ public class SketchMergeAggregatorFactory extends SketchAggregatorFactory
   public Object finalizeComputation(Object object)
   {
     if (shouldFinalize) {
-      Sketch sketch = SketchAggregatorFactory.toSketch(object);
+      SketchHolder holder = (SketchHolder) object;
       if (errorBoundsStdDev != null) {
-        SketchEstimateWithErrorBounds result = new SketchEstimateWithErrorBounds(
-            sketch.getEstimate(),
-            sketch.getUpperBound(errorBoundsStdDev),
-            sketch.getLowerBound(errorBoundsStdDev),
-            errorBoundsStdDev);
-        return result;
+        return holder.getEstimateWithErrorBounds(errorBoundsStdDev);
       } else {
-        return sketch.getEstimate();
+        return holder.getEstimate();
       }
     } else {
       return object;
@@ -167,11 +159,19 @@ public class SketchMergeAggregatorFactory extends SketchAggregatorFactory
     if (shouldFinalize != that.shouldFinalize) {
       return false;
     }
-    if (errorBoundsStdDev != that.errorBoundsStdDev) {
+
+    if (errorBoundsStdDev == null ^ that.errorBoundsStdDev == null) {
+      // one of the two stddevs (not both) are null
       return false;
     }
-    return isInputThetaSketch == that.isInputThetaSketch;
 
+    if (errorBoundsStdDev != null && that.errorBoundsStdDev != null &&
+        errorBoundsStdDev.intValue() != that.errorBoundsStdDev.intValue()) {
+      // neither stddevs are null, Integer values don't match
+      return false;
+    }
+
+    return isInputThetaSketch == that.isInputThetaSketch;
   }
 
   @Override

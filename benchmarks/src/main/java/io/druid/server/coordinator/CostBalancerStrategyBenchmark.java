@@ -1,24 +1,25 @@
 /*
  * Licensed to Metamarkets Group Inc. (Metamarkets) under one
- * or more contributor license agreements.  See the NOTICE file
+ * or more contributor license agreements. See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership.  Metamarkets licenses this file
+ * regarding copyright ownership. Metamarkets licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * with the License. You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
+ * KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations
  * under the License.
  */
 
 package io.druid.server.coordinator;
 
+import io.druid.java.util.common.DateTimes;
 import io.druid.timeline.DataSegment;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
@@ -39,7 +40,7 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Benchmark)
 public class CostBalancerStrategyBenchmark
 {
-  private final static DateTime t0 = new DateTime("2016-01-01T01:00:00Z");
+  private final static DateTime t0 = DateTimes.of("2016-01-01T01:00:00Z");
 
   private List<DataSegment> segments;
   private DataSegment segment;
@@ -57,8 +58,8 @@ public class CostBalancerStrategyBenchmark
 
     Random r = new Random(1234);
     segments = new ArrayList<>(n);
-    for(int i = 0; i < n; ++i) {
-      final DateTime t = t0.minusHours(r.nextInt(365 * 24) - 365*12);
+    for (int i = 0; i < n; ++i) {
+      final DateTime t = t0.minusHours(r.nextInt(365 * 24) - 365 * 12);
       segments.add(createSegment(t));
     }
   }
@@ -85,7 +86,7 @@ public class CostBalancerStrategyBenchmark
   public double measureCostStrategySingle() throws InterruptedException
   {
     double totalCost = 0;
-    for(DataSegment s :  segments) {
+    for (DataSegment s : segments) {
       totalCost += CostBalancerStrategy.computeJointSegmentsCost(segment, s);
     }
     return totalCost;

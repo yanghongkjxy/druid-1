@@ -19,43 +19,54 @@
 
 package io.druid.query.aggregation.hyperloglog;
 
+import io.druid.hll.HyperLogLogCollector;
 import io.druid.query.aggregation.Aggregator;
-import io.druid.segment.ObjectColumnSelector;
+import io.druid.segment.BaseObjectColumnValueSelector;
+
+import javax.annotation.Nullable;
 
 /**
  */
 public class HyperUniquesAggregator implements Aggregator
 {
-  private final ObjectColumnSelector selector;
+  private final BaseObjectColumnValueSelector selector;
 
   private HyperLogLogCollector collector;
 
-  public HyperUniquesAggregator(
-      ObjectColumnSelector selector
-  )
+  public HyperUniquesAggregator(BaseObjectColumnValueSelector selector)
   {
     this.selector = selector;
-
-    this.collector = HyperLogLogCollector.makeLatestCollector();
   }
 
   @Override
   public void aggregate()
   {
-    collector.fold((HyperLogLogCollector) selector.get());
+    Object object = selector.getObject();
+    if (object == null) {
+      return;
+    }
+    if (collector == null) {
+      collector = HyperLogLogCollector.makeLatestCollector();
+    }
+    collector.fold((HyperLogLogCollector) object);
   }
 
   @Override
   public void reset()
   {
-    collector = HyperLogLogCollector.makeLatestCollector();
+    collector = null;
   }
 
+  @Nullable
   @Override
   public Object get()
   {
-    // Workaround for OnheapIncrementalIndex's penchant for calling "aggregate" and "get" simultaneously.
-    return HyperLogLogCollector.makeCollector(collector.getStorageBuffer().duplicate());
+    if (collector == null) {
+      return null;
+    }
+    // Workaround for non-thread-safe use of HyperLogLogCollector.
+    // OnheapIncrementalIndex has a penchant for calling "aggregate" and "get" simultaneously.
+    return HyperLogLogCollector.makeCollectorSharingStorage(collector);
   }
 
   @Override
@@ -71,9 +82,9 @@ public class HyperUniquesAggregator implements Aggregator
   }
 
   @Override
-  public String getName()
+  public double getDouble()
   {
-    throw new UnsupportedOperationException("getName is deprecated");
+    throw new UnsupportedOperationException("HyperUniquesAggregator does not support getDouble()");
   }
 
   @Override

@@ -29,6 +29,8 @@ import com.metamx.http.client.Request;
 import com.metamx.http.client.response.StatusResponseHandler;
 import com.metamx.http.client.response.StatusResponseHolder;
 import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.RE;
+import io.druid.java.util.common.StringUtils;
 import io.druid.testing.IntegrationTestingConfig;
 import io.druid.testing.guice.TestClient;
 import org.jboss.netty.handler.codec.http.HttpMethod;
@@ -37,6 +39,7 @@ import org.joda.time.Interval;
 
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class CoordinatorResourceTestClient
@@ -48,8 +51,9 @@ public class CoordinatorResourceTestClient
 
   @Inject
   CoordinatorResourceTestClient(
-    ObjectMapper jsonMapper,
-    @TestClient HttpClient httpClient, IntegrationTestingConfig config
+      ObjectMapper jsonMapper,
+      @TestClient HttpClient httpClient,
+      IntegrationTestingConfig config
   )
   {
     this.jsonMapper = jsonMapper;
@@ -60,7 +64,7 @@ public class CoordinatorResourceTestClient
 
   private String getCoordinatorURL()
   {
-    return String.format(
+    return StringUtils.format(
         "%s/druid/coordinator/v1/",
         coordinator
     );
@@ -68,16 +72,16 @@ public class CoordinatorResourceTestClient
 
   private String getIntervalsURL(String dataSource)
   {
-    return String.format("%sdatasources/%s/intervals", getCoordinatorURL(), dataSource);
+    return StringUtils.format("%sdatasources/%s/intervals", getCoordinatorURL(), dataSource);
   }
 
   private String getLoadStatusURL()
   {
-    return String.format("%s%s", getCoordinatorURL(), "loadstatus");
+    return StringUtils.format("%s%s", getCoordinatorURL(), "loadstatus");
   }
 
   // return a list of the segment dates for the specified datasource
-  public ArrayList<String> getSegmentIntervals(final String dataSource) throws Exception
+  public List<String> getSegmentIntervals(final String dataSource) throws Exception
   {
     ArrayList<String> segments = null;
     try {
@@ -124,7 +128,7 @@ public class CoordinatorResourceTestClient
     try {
       makeRequest(
           HttpMethod.DELETE,
-          String.format(
+          StringUtils.format(
               "%sdatasources/%s",
               getCoordinatorURL(),
               dataSource
@@ -141,7 +145,7 @@ public class CoordinatorResourceTestClient
     try {
       makeRequest(
           HttpMethod.DELETE,
-          String.format(
+          StringUtils.format(
               "%sdatasources/%s/intervals/%s",
               getCoordinatorURL(),
               dataSource, interval.toString().replace("/", "_")
@@ -150,6 +154,23 @@ public class CoordinatorResourceTestClient
     }
     catch (Exception e) {
       throw Throwables.propagate(e);
+    }
+  }
+
+  public HttpResponseStatus getProxiedOverlordScalingResponseStatus()
+  {
+    try {
+      StatusResponseHolder response = makeRequest(
+          HttpMethod.GET,
+          StringUtils.format(
+              "%s/druid/indexer/v1/scaling",
+              coordinator
+          )
+      );
+      return response.getStatus();
+    }
+    catch (Exception e) {
+      throw new RE(e, "Unable to get scaling status from [%s]", coordinator);
     }
   }
 

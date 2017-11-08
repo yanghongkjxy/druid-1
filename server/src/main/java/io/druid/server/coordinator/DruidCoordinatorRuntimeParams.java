@@ -23,6 +23,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.metamx.emitter.service.ServiceEmitter;
 import io.druid.client.DruidDataSource;
+import io.druid.java.util.common.DateTimes;
 import io.druid.metadata.MetadataRuleManager;
 import io.druid.timeline.DataSegment;
 import org.joda.time.DateTime;
@@ -48,9 +49,9 @@ public class DruidCoordinatorRuntimeParams
   private final CoordinatorDynamicConfig coordinatorDynamicConfig;
   private final CoordinatorStats stats;
   private final DateTime balancerReferenceTimestamp;
-  private final BalancerStrategyFactory strategyFactory;
+  private final BalancerStrategy balancerStrategy;
 
-  public DruidCoordinatorRuntimeParams(
+  private DruidCoordinatorRuntimeParams(
       long startTime,
       DruidCluster druidCluster,
       MetadataRuleManager databaseRuleManager,
@@ -63,7 +64,7 @@ public class DruidCoordinatorRuntimeParams
       CoordinatorDynamicConfig coordinatorDynamicConfig,
       CoordinatorStats stats,
       DateTime balancerReferenceTimestamp,
-      BalancerStrategyFactory strategyFactory
+      BalancerStrategy balancerStrategy
   )
   {
     this.startTime = startTime;
@@ -78,7 +79,7 @@ public class DruidCoordinatorRuntimeParams
     this.coordinatorDynamicConfig = coordinatorDynamicConfig;
     this.stats = stats;
     this.balancerReferenceTimestamp = balancerReferenceTimestamp;
-    this.strategyFactory = strategyFactory;
+    this.balancerStrategy = balancerStrategy;
   }
 
   public long getStartTime()
@@ -141,9 +142,9 @@ public class DruidCoordinatorRuntimeParams
     return balancerReferenceTimestamp;
   }
 
-  public BalancerStrategyFactory getBalancerStrategyFactory()
+  public BalancerStrategy getBalancerStrategy()
   {
-    return strategyFactory;
+    return balancerStrategy;
   }
 
   public boolean hasDeletionWaitTimeElapsed()
@@ -171,7 +172,7 @@ public class DruidCoordinatorRuntimeParams
         coordinatorDynamicConfig,
         stats,
         balancerReferenceTimestamp,
-        strategyFactory
+        balancerStrategy
     );
   }
 
@@ -190,7 +191,7 @@ public class DruidCoordinatorRuntimeParams
         coordinatorDynamicConfig,
         stats,
         balancerReferenceTimestamp,
-        strategyFactory
+        balancerStrategy
     );
   }
 
@@ -208,7 +209,7 @@ public class DruidCoordinatorRuntimeParams
     private CoordinatorDynamicConfig coordinatorDynamicConfig;
     private CoordinatorStats stats;
     private DateTime balancerReferenceTimestamp;
-    private BalancerStrategyFactory strategyFactory;
+    private BalancerStrategy balancerStrategy;
 
     Builder()
     {
@@ -223,7 +224,7 @@ public class DruidCoordinatorRuntimeParams
       this.emitter = null;
       this.stats = new CoordinatorStats();
       this.coordinatorDynamicConfig = new CoordinatorDynamicConfig.Builder().build();
-      this.balancerReferenceTimestamp = DateTime.now();
+      this.balancerReferenceTimestamp = DateTimes.nowUtc();
     }
 
     Builder(
@@ -239,7 +240,7 @@ public class DruidCoordinatorRuntimeParams
         CoordinatorDynamicConfig coordinatorDynamicConfig,
         CoordinatorStats stats,
         DateTime balancerReferenceTimestamp,
-        BalancerStrategyFactory strategyFactory
+        BalancerStrategy balancerStrategy
     )
     {
       this.startTime = startTime;
@@ -254,7 +255,7 @@ public class DruidCoordinatorRuntimeParams
       this.coordinatorDynamicConfig = coordinatorDynamicConfig;
       this.stats = stats;
       this.balancerReferenceTimestamp = balancerReferenceTimestamp;
-      this.strategyFactory=strategyFactory;
+      this.balancerStrategy = balancerStrategy;
     }
 
     public DruidCoordinatorRuntimeParams build()
@@ -272,7 +273,7 @@ public class DruidCoordinatorRuntimeParams
           coordinatorDynamicConfig,
           stats,
           balancerReferenceTimestamp,
-          strategyFactory
+          balancerStrategy
       );
     }
 
@@ -348,9 +349,9 @@ public class DruidCoordinatorRuntimeParams
       return this;
     }
 
-    public Builder withBalancerStrategyFactory(BalancerStrategyFactory strategyFactory)
+    public Builder withBalancerStrategy(BalancerStrategy balancerStrategy)
     {
-      this.strategyFactory=strategyFactory;
+      this.balancerStrategy = balancerStrategy;
       return this;
     }
   }
